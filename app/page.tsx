@@ -23,7 +23,7 @@ import {
   X,
 } from "lucide-react";
 type ProductLine = { product: string; sku: string; quantity: number; unitPrice: number };
-type CatalogueItem = { id: number; name: string; sku: string; unitPrice: number; category: string; image: string };
+type CatalogueItem = { id: number; name: string; sku: string; unitPrice: number; category: string; image: string; description: string; cartonQty: string };
 type Order = {
   id: string;
   client: string;
@@ -174,10 +174,10 @@ const seedInvoices: Invoice[] = [
   },
 ];
 const seedCatalogue: CatalogueItem[] = [
-  { id: 1, name: "Party Goggles", sku: "AB-981", unitPrice: 12, category: "Party Props", image: "" },
-  { id: 2, name: "Balloon Pump", sku: "AB-971", unitPrice: 17, category: "Balloons", image: "" },
-  { id: 3, name: "Cake Crown", sku: "AB-821", unitPrice: 42, category: "Cake Accessories", image: "" },
-  { id: 4, name: "LED Light 10cm", sku: "AB-871", unitPrice: 94, category: "Decorations", image: "" },
+  { id: 1, name: "Party Goggles", sku: "AB-981", unitPrice: 12, category: "Party Props", image: "", description: "Party Goggles", cartonQty: "" },
+  { id: 2, name: "Balloon Pump", sku: "AB-971", unitPrice: 17, category: "Balloons", image: "", description: "Balloon Pump", cartonQty: "" },
+  { id: 3, name: "Cake Crown", sku: "AB-821", unitPrice: 42, category: "Cake Accessories", image: "", description: "Cake Crown", cartonQty: "" },
+  { id: 4, name: "LED Light 10cm", sku: "AB-871", unitPrice: 94, category: "Decorations", image: "", description: "LED Light 10cm", cartonQty: "" },
 ];
 const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 const linesFor = (order: Order): ProductLine[] => order.products || [{ product: order.product, sku: order.sku, quantity: order.quantity, unitPrice: order.unitPrice }];
@@ -1033,23 +1033,34 @@ function CataloguePanel({ items, edit, addDrafts }: { items: CatalogueItem[]; ed
     if (!file) return;
     setScanState("scanning"); setNotice("Reading SKU IDs from your catalogue document…");
     try {
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      if (isPdf) {
+        const form = new FormData(); form.append("file", file);
+        const response = await fetch("/api/pdf-text", { method: "POST", body: form });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "The catalogue PDF could not be read.");
+        if (!result.products?.length) throw new Error("No product records were found in this catalogue PDF.");
+        addDrafts(result.products.map((product: Omit<CatalogueItem, "id">, index: number) => ({ ...product, id: Date.now() + index })));
+        setScanState("ready"); setNotice(`${result.products.length} products imported with descriptions, carton quantities, and prices. Add or replace product images from each card.`);
+        return;
+      }
       const text = await readDocumentText(file);
       const skus = [...new Set((text.toUpperCase().match(/\b[A-Z]{1,4}[- ]?\d{2,8}\b/g) || []).map((sku) => sku.replace(" ", "-")))];
       if (!skus.length) throw new Error("No SKUs found");
       const image = (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) ? "" : URL.createObjectURL(file);
-      addDrafts(skus.map((sku, index) => ({ id: Date.now() + index, sku, name: `New product — ${sku}`, unitPrice: 0, category: "Uncategorised", image })));
+      addDrafts(skus.map((sku, index) => ({ id: Date.now() + index, sku, name: `New product — ${sku}`, description: "", cartonQty: "", unitPrice: 0, category: "Uncategorised", image })));
       setScanState("ready"); setNotice(`${skus.length} SKU draft${skus.length === 1 ? "" : "s"} added. Open each card to add its product name and price.`);
     } catch (error) { setScanState("error"); setNotice(error instanceof Error ? error.message : "The catalogue file could not be read."); }
   };
   return <section className="catalogue-page"><div className="catalogue-top"><div><span className="overline">PRODUCT LIBRARY</span><h2>Your catalogue, ready for order matching.</h2><p>Upload individual product photos, or scan a complete catalogue image or PDF to create SKU drafts quickly.</p></div><div className="catalogue-count"><b>{items.length}</b><span>active SKUs</span></div></div><section className="catalogue-actions"><label className="catalogue-scan"><div className="scan-orb"><ScanText size={20}/></div><div><b>Scan catalogue image or PDF</b><p>Read SKU IDs from a complete catalogue page.</p></div><span className="scan-cta">Upload file <ImagePlus size={14}/></span><input type="file" accept="image/*,application/pdf" onChange={(e) => importCatalogueImage(e.target.files?.[0])} disabled={scanState === "scanning"}/></label><div className="catalogue-tip"><b>How it works</b><p>Catalogue SKUs are matched automatically when you scan an incoming order image or PDF.</p></div></section>{scanState !== "idle" && <div className={`catalogue-notice ${scanState}`}><ScanText size={16}/>{notice}</div>}<div className="catalogue-toolbar"><div><h3>Products</h3><span>{items.length} shown</span></div><span>Click a product to edit its image, SKU, and price.</span></div><section className="catalogue-grid">{items.map((item) => <article className="catalogue-card" key={item.id} onClick={() => edit(item)}><div className="catalogue-image">{item.image ? <img src={item.image} alt={item.name}/> : <PackageCheck size={27}/>}<span>{item.category}</span></div><div className="catalogue-info"><small>{item.sku}</small><h3>{item.name}</h3><p>{item.unitPrice ? `${money(item.unitPrice)} / pc` : "Price to be added"}</p><button className="edit-product"><Pencil size={13}/> Edit product</button></div></article>)}{!items.length && <div className="empty">No catalogue products match your search.</div>}</section></section>;
 }
 function CatalogueModal({ item, close, save }: { item: CatalogueItem | null; close: () => void; save: (item: CatalogueItem) => void }) {
-  const initial = item || { id: Date.now(), name: "", sku: "", unitPrice: 0, category: "Party Props", image: "" };
+  const initial = item || { id: Date.now(), name: "", sku: "", unitPrice: 0, category: "Party Props", image: "", description: "", cartonQty: "" };
   const [form, setForm] = useState(initial);
   const [preview, setPreview] = useState(initial.image);
   const update = (key: keyof CatalogueItem, value: string | number) => setForm({ ...form, [key]: value });
   const chooseImage = (file?: File) => { if (!file) return; const image = URL.createObjectURL(file); setPreview(image); setForm({ ...form, image }); };
-  return <Shell close={close}><div className="order-modal-head"><div className="modal-mark"><PackageCheck size={22}/></div><div><span className="overline">PRODUCT CATALOGUE</span><h2>{item ? "Edit product" : "Add a product"}</h2><p>This SKU will be used to recognise future orders.</p></div></div><label className="catalogue-upload">{preview ? <img src={preview} alt="Product preview"/> : <><ImagePlus size={23}/><b>Upload product image</b><span>PNG or JPG</span></>}<input type="file" accept="image/*" onChange={(e) => chooseImage(e.target.files?.[0])}/></label><div className="form-row"><label>Product name<input value={form.name} onChange={(e) => update("name", e.target.value)} required/></label><label>SKU ID<input value={form.sku} onChange={(e) => update("sku", e.target.value.toUpperCase())} placeholder="AB-981" required/></label></div><div className="form-row"><label>Unit price (₹)<input type="number" min="0" value={form.unitPrice || ""} onChange={(e) => update("unitPrice", Number(e.target.value))} required/></label><label>Category<select value={form.category} onChange={(e) => update("category", e.target.value)}>{["Balloons", "Party Props", "Cake Accessories", "Decorations", "Themed Parties"].map((value) => <option key={value}>{value}</option>)}</select></label></div><button className="primary modal-submit" type="button" onClick={() => save(form)}>Save to catalogue</button></Shell>;
+  return <Shell close={close}><div className="order-modal-head"><div className="modal-mark"><PackageCheck size={22}/></div><div><span className="overline">PRODUCT CATALOGUE</span><h2>{item ? "Edit product" : "Add a product"}</h2><p>This SKU will be used to recognise future orders.</p></div></div><label className="catalogue-upload">{preview ? <img src={preview} alt="Product preview"/> : <><ImagePlus size={23}/><b>Upload product image</b><span>PNG or JPG</span></>}<input type="file" accept="image/*" onChange={(e) => chooseImage(e.target.files?.[0])}/></label><div className="form-row"><label>Product name<input value={form.name} onChange={(e) => update("name", e.target.value)} required/></label><label>SKU ID<input value={form.sku} onChange={(e) => update("sku", e.target.value.toUpperCase())} placeholder="AB-981" required/></label></div><label>Description<textarea value={form.description} onChange={(e) => update("description", e.target.value)} placeholder="Product details from the catalogue"/></label><div className="form-row"><label>Carton quantity<input value={form.cartonQty} onChange={(e) => update("cartonQty", e.target.value)} placeholder="e.g. 400 PCS"/></label><label>Unit price (₹)<input type="number" min="0" value={form.unitPrice || ""} onChange={(e) => update("unitPrice", Number(e.target.value))} required/></label></div><label>Category<select value={form.category} onChange={(e) => update("category", e.target.value)}>{["Balloons", "Party Props", "Cake Accessories", "Decorations", "Themed Parties", "Imported PDF"].map((value) => <option key={value}>{value}</option>)}</select></label><button className="primary modal-submit" type="button" onClick={() => save(form)}>Save to catalogue</button></Shell>;
 }
 function ClientModal({
   client,
