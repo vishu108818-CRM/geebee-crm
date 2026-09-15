@@ -349,7 +349,7 @@ export default function Home() {
           />
         )}{" "}
         {section === "Orders" && (
-          <Orders orders={shown} edit={(o) => show("order", o)} />
+          <Orders orders={shown} edit={(o) => show("order", o)} remove={(ids) => { setOrders((current) => current.filter((item) => !ids.includes(item.id))); flash(`${ids.length} order${ids.length === 1 ? "" : "s"} removed`); }} />
         )}{" "}
         {section === "Clients" && (
           <Clients
@@ -359,6 +359,7 @@ export default function Home() {
                 .includes(search.toLowerCase()),
             )}
             edit={(c) => show("client", c)}
+            remove={(ids) => { setClients((current) => current.filter((item) => !ids.includes(item.id))); flash(`${ids.length} client${ids.length === 1 ? "" : "s"} removed`); }}
           />
         )}{" "}
         {section === "Invoices" && (
@@ -369,6 +370,7 @@ export default function Home() {
                 .includes(search.toLowerCase()),
             )}
             edit={(i) => show("invoice", i)}
+            remove={(ids) => { setInvoices((current) => current.filter((item) => !ids.includes(item.id))); flash(`${ids.length} invoice${ids.length === 1 ? "" : "s"} removed`); }}
           />
         )}{" "}
         {section === "Catalogue" && (
@@ -607,9 +609,11 @@ function Overview({
 function Orders({
   orders,
   edit,
+  remove,
 }: {
   orders: Order[];
   edit: (o: Order) => void;
+  remove: (ids: string[]) => void;
 }) {
   return (
     <section className="panel record-panel">
@@ -619,24 +623,38 @@ function Orders({
           <p>Every product line can be edited at any time.</p>
         </div>
       </div>
-      <OrderTable orders={orders} edit={edit} />
+      <OrderTable orders={orders} edit={edit} remove={remove} />
     </section>
   );
 }
 function OrderTable({
   orders,
   edit,
+  remove,
   compact = false,
 }: {
   orders: Order[];
   edit: (o: Order) => void;
+  remove?: (ids: string[]) => void;
   compact?: boolean;
 }) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const selectable = Boolean(remove) && !compact;
+  const toggle = (id: string) => setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  const removeSelected = () => {
+    if (!remove || !selected.length || !window.confirm(`Remove ${selected.length} selected order${selected.length === 1 ? "" : "s"}?`)) return;
+    remove(selected); setSelected([]);
+  };
+  const removeOne = (order: Order) => {
+    if (!remove || !window.confirm(`Remove order ${order.id}?`)) return;
+    remove([order.id]); setSelected((current) => current.filter((id) => id !== order.id));
+  };
   return (
-    <div className="table-wrap">
+    <><div className="record-bulk-bar">{selectable ? <><span>Select orders to manage them together.</span>{selected.length > 0 && <button type="button" className="bulk-delete" onClick={removeSelected}><Trash2 size={14}/> Remove {selected.length} selected</button>}</> : null}</div><div className="table-wrap">
       <table className="records">
         <thead>
           <tr>
+            {selectable && <th><input className="record-check" type="checkbox" checked={orders.length > 0 && orders.every((order) => selected.includes(order.id))} onChange={() => setSelected(selected.length === orders.length ? [] : orders.map((order) => order.id))} aria-label="Select all orders" /></th>}
             <th>ORDER</th>
             <th>CLIENT</th>
             {!compact && (
@@ -657,6 +675,7 @@ function OrderTable({
         <tbody>
           {orders.map((o) => (
             <tr key={o.id}>
+              {selectable && <td><input className="record-check" type="checkbox" checked={selected.includes(o.id)} onChange={() => toggle(o.id)} aria-label={`Select order ${o.id}`} /></td>}
               <td>
                 <b>{o.id}</b>
               </td>
@@ -695,25 +714,29 @@ function OrderTable({
                 <Pill value={o.payment} />
               </td>
               <td>
-                <button className="edit-btn" onClick={() => edit(o)}>
-                  <Pencil size={14} />
-                </button>
+                <div className="record-actions"><button className="edit-btn" onClick={() => edit(o)} aria-label={`Edit ${o.id}`}><Pencil size={14} /></button>{selectable && <button className="row-delete" type="button" onClick={() => removeOne(o)} aria-label={`Remove ${o.id}`}><Trash2 size={14}/></button>}</div>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
       {!orders.length && <div className="empty">No matching orders found.</div>}
-    </div>
+    </div></>
   );
 }
 function Clients({
   clients,
   edit,
+  remove,
 }: {
   clients: Client[];
   edit: (c: Client) => void;
+  remove: (ids: number[]) => void;
 }) {
+  const [selected, setSelected] = useState<number[]>([]);
+  const toggle = (id: number) => setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  const removeSelected = () => { if (selected.length && window.confirm(`Remove ${selected.length} selected client${selected.length === 1 ? "" : "s"}?`)) { remove(selected); setSelected([]); } };
+  const removeOne = (client: Client) => { if (window.confirm(`Remove ${client.name} from the client directory?`)) { remove([client.id]); setSelected((current) => current.filter((id) => id !== client.id)); } };
   return (
     <section className="panel record-panel">
       <div className="panel-head">
@@ -722,10 +745,11 @@ function Clients({
           <p>Edit contacts, cities and payment thresholds.</p>
         </div>
       </div>
-      <div className="table-wrap">
+      <div className="record-bulk-bar"><span>Select clients to manage them together.</span>{selected.length > 0 && <button type="button" className="bulk-delete" onClick={removeSelected}><Trash2 size={14}/> Remove {selected.length} selected</button>}</div><div className="table-wrap">
         <table className="records">
           <thead>
             <tr>
+              <th><input className="record-check" type="checkbox" checked={clients.length > 0 && clients.every((client) => selected.includes(client.id))} onChange={() => setSelected(selected.length === clients.length ? [] : clients.map((client) => client.id))} aria-label="Select all clients" /></th>
               <th>CLIENT</th>
               <th>LOCATION</th>
               <th>PRIMARY CONTACT</th>
@@ -737,6 +761,7 @@ function Clients({
           <tbody>
             {clients.map((c) => (
               <tr key={c.id}>
+                <td><input className="record-check" type="checkbox" checked={selected.includes(c.id)} onChange={() => toggle(c.id)} aria-label={`Select ${c.name}`} /></td>
                 <td>
                   <div className="client">
                     <span className="mini-avatar">{c.avatar}</span>
@@ -750,9 +775,7 @@ function Clients({
                   <b>{c.credit}</b>
                 </td>
                 <td>
-                  <button className="edit-btn" onClick={() => edit(c)}>
-                    <Pencil size={14} />
-                  </button>
+                  <div className="record-actions"><button className="edit-btn" onClick={() => edit(c)} aria-label={`Edit ${c.name}`}><Pencil size={14} /></button><button className="row-delete" type="button" onClick={() => removeOne(c)} aria-label={`Remove ${c.name}`}><Trash2 size={14}/></button></div>
                 </td>
               </tr>
             ))}
@@ -765,10 +788,16 @@ function Clients({
 function Invoices({
   invoices,
   edit,
+  remove,
 }: {
   invoices: Invoice[];
   edit: (i: Invoice) => void;
+  remove: (ids: string[]) => void;
 }) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const toggle = (id: string) => setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  const removeSelected = () => { if (selected.length && window.confirm(`Remove ${selected.length} selected invoice${selected.length === 1 ? "" : "s"}?`)) { remove(selected); setSelected([]); } };
+  const removeOne = (invoice: Invoice) => { if (window.confirm(`Remove invoice ${invoice.id}?`)) { remove([invoice.id]); setSelected((current) => current.filter((id) => id !== invoice.id)); } };
   return (
     <section className="panel record-panel">
       <div className="panel-head">
@@ -777,10 +806,11 @@ function Invoices({
           <p>Keep invoice status and payment due dates current.</p>
         </div>
       </div>
-      <div className="table-wrap">
+      <div className="record-bulk-bar"><span>Select invoices to manage them together.</span>{selected.length > 0 && <button type="button" className="bulk-delete" onClick={removeSelected}><Trash2 size={14}/> Remove {selected.length} selected</button>}</div><div className="table-wrap">
         <table className="records">
           <thead>
             <tr>
+              <th><input className="record-check" type="checkbox" checked={invoices.length > 0 && invoices.every((invoice) => selected.includes(invoice.id))} onChange={() => setSelected(selected.length === invoices.length ? [] : invoices.map((invoice) => invoice.id))} aria-label="Select all invoices" /></th>
               <th>INVOICE</th>
               <th>CLIENT</th>
               <th>ORDER</th>
@@ -793,6 +823,7 @@ function Invoices({
           <tbody>
             {invoices.map((i) => (
               <tr key={i.id}>
+                <td><input className="record-check" type="checkbox" checked={selected.includes(i.id)} onChange={() => toggle(i.id)} aria-label={`Select ${i.id}`} /></td>
                 <td>
                   <b>{i.id}</b>
                 </td>
@@ -806,9 +837,7 @@ function Invoices({
                   <Pill value={i.status} />
                 </td>
                 <td>
-                  <button className="edit-btn" onClick={() => edit(i)}>
-                    <Pencil size={14} />
-                  </button>
+                  <div className="record-actions"><button className="edit-btn" onClick={() => edit(i)} aria-label={`Edit ${i.id}`}><Pencil size={14} /></button><button className="row-delete" type="button" onClick={() => removeOne(i)} aria-label={`Remove ${i.id}`}><Trash2 size={14}/></button></div>
                 </td>
               </tr>
             ))}
