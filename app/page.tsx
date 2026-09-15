@@ -207,6 +207,7 @@ const readDocumentText = async (file: File) => {
   return (await recognize(file, "eng")).data.text;
 };
 const storageKey = "geebee-crm-data-v1";
+const approvedWorkspaceEmails = ["vishu108818@gmail.com"];
 type SavedCrmData = { orders: Order[]; clients: Client[]; invoices: Invoice[]; catalogue: CatalogueItem[] };
 const loadCrmData = (): SavedCrmData => {
   const fallback = { orders: seedOrders, clients: seedClients, invoices: seedInvoices, catalogue: seedCatalogue };
@@ -242,6 +243,7 @@ function SignInScreen() {
   const [sending, setSending] = useState(false);
   const sendMagicLink = async () => {
     if (!supabase || !email.trim()) return;
+    if (!approvedWorkspaceEmails.includes(email.trim().toLowerCase())) { setMessage("This email is not approved for the GeeBee CRM workspace."); return; }
     setSending(true); setMessage("");
     const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: window.location.origin } });
     setSending(false);
