@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./product-lines.css";
 import "./catalogue.css";
 import "./catalogue-v2.css";
@@ -204,6 +204,29 @@ const readDocumentText = async (file: File) => {
   const { recognize } = await import("tesseract.js");
   return (await recognize(file, "eng")).data.text;
 };
+const storageKey = "geebee-crm-data-v1";
+type SavedCrmData = { orders: Order[]; clients: Client[]; invoices: Invoice[]; catalogue: CatalogueItem[] };
+const loadCrmData = (): SavedCrmData => {
+  const fallback = { orders: seedOrders, clients: seedClients, invoices: seedInvoices, catalogue: seedCatalogue };
+  if (typeof window === "undefined") return fallback;
+  try {
+    const saved = window.localStorage.getItem(storageKey);
+    if (!saved) return fallback;
+    const parsed = JSON.parse(saved) as Partial<SavedCrmData>;
+    return {
+      orders: Array.isArray(parsed.orders) ? parsed.orders : fallback.orders,
+      clients: Array.isArray(parsed.clients) ? parsed.clients : fallback.clients,
+      invoices: Array.isArray(parsed.invoices) ? parsed.invoices : fallback.invoices,
+      catalogue: Array.isArray(parsed.catalogue) ? parsed.catalogue : fallback.catalogue,
+    };
+  } catch { return fallback; }
+};
+const fileToDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result));
+  reader.onerror = () => reject(new Error("The image could not be saved."));
+  reader.readAsDataURL(file);
+});
 function Pill({ value }: { value: string }) {
   return (
     <span className={`pill ${value.toLowerCase().replaceAll(" ", "-")}`}>
@@ -218,6 +241,7 @@ export default function Home() {
     [clients, setClients] = useState(seedClients),
     [invoices, setInvoices] = useState(seedInvoices),
     [catalogue, setCatalogue] = useState(seedCatalogue),
+    [storageReady, setStorageReady] = useState(false),
     [modal, setModal] = useState<"order" | "client" | "invoice" | "catalogue" | null>(null),
     [editing, setEditing] = useState<any>(null),
     [toast, setToast] = useState("");
@@ -229,6 +253,15 @@ export default function Home() {
       setEditing(d || null);
       setModal(k);
     };
+  useEffect(() => {
+    const saved = loadCrmData();
+    setOrders(saved.orders); setClients(saved.clients); setInvoices(saved.invoices); setCatalogue(saved.catalogue);
+    setStorageReady(true);
+  }, []);
+  useEffect(() => {
+    if (!storageReady) return;
+    window.localStorage.setItem(storageKey, JSON.stringify({ orders, clients, invoices, catalogue }));
+  }, [orders, clients, invoices, catalogue, storageReady]);
   const shown = useMemo(
     () =>
       orders.filter((o) =>
@@ -1089,7 +1122,7 @@ function CataloguePanel({ items, edit, addDrafts, remove }: { items: CatalogueIt
       const text = await readDocumentText(file);
       const skus = [...new Set((text.toUpperCase().match(/\b[A-Z]{1,4}[- ]?\d{2,8}\b/g) || []).map((sku) => sku.replace(" ", "-")))];
       if (!skus.length) throw new Error("No SKUs found");
-      const image = (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) ? "" : URL.createObjectURL(file);
+      const image = (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) ? "" : await fileToDataUrl(file);
       addDrafts(skus.map((sku, index) => ({ id: Date.now() + index, sku, name: `New product — ${sku}`, description: "", cartonQty: "", unitPrice: 0, category: "Uncategorised", image })));
       setScanState("ready"); setNotice(`${skus.length} SKU draft${skus.length === 1 ? "" : "s"} added. Open each card to add its product name and price.`);
     } catch (error) { setScanState("error"); setNotice(error instanceof Error ? error.message : "The catalogue file could not be read."); }
@@ -1101,7 +1134,7 @@ function CatalogueModal({ item, close, save }: { item: CatalogueItem | null; clo
   const [form, setForm] = useState(initial);
   const [preview, setPreview] = useState(initial.image);
   const update = (key: keyof CatalogueItem, value: string | number) => setForm({ ...form, [key]: value });
-  const chooseImage = (file?: File) => { if (!file) return; const image = URL.createObjectURL(file); setPreview(image); setForm({ ...form, image }); };
+  const chooseImage = async (file?: File) => { if (!file) return; const image = await fileToDataUrl(file); setPreview(image); setForm({ ...form, image }); };
   return <Shell close={close}><div className="order-modal-head"><div className="modal-mark"><PackageCheck size={22}/></div><div><span className="overline">PRODUCT CATALOGUE</span><h2>{item ? "Edit product" : "Add a product"}</h2><p>This SKU will be used to recognise future orders.</p></div></div><label className="catalogue-upload">{preview ? <img src={preview} alt="Product preview"/> : <><ImagePlus size={23}/><b>Upload product image</b><span>PNG or JPG</span></>}<input type="file" accept="image/*" onChange={(e) => chooseImage(e.target.files?.[0])}/></label><div className="form-row"><label>Product name<input value={form.name} onChange={(e) => update("name", e.target.value)} required/></label><label>SKU ID<input value={form.sku} onChange={(e) => update("sku", e.target.value.toUpperCase())} placeholder="AB-981" required/></label></div><label>Description<textarea value={form.description} onChange={(e) => update("description", e.target.value)} placeholder="Product details from the catalogue"/></label><div className="form-row"><label>Carton quantity<input value={form.cartonQty} onChange={(e) => update("cartonQty", e.target.value)} placeholder="e.g. 400 PCS"/></label><label>Unit price (₹)<input type="number" min="0" value={form.unitPrice || ""} onChange={(e) => update("unitPrice", Number(e.target.value))} required/></label></div><label>Category<select value={form.category} onChange={(e) => update("category", e.target.value)}>{["Balloons", "Party Props", "Cake Accessories", "Decorations", "Themed Parties", "Imported PDF"].map((value) => <option key={value}>{value}</option>)}</select></label><button className="primary modal-submit" type="button" onClick={() => save(form)}>Save to catalogue</button></Shell>;
 }
 function ClientModal({
