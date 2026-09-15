@@ -192,14 +192,12 @@ const initials = (n: string) =>
     .toUpperCase();
 const readDocumentText = async (file: File) => {
   if (file.type === "application/pdf") {
-    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    const document = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
-    const pages = await Promise.all(Array.from({ length: document.numPages }, async (_, index) => {
-      const page = await document.getPage(index + 1);
-      const content = await page.getTextContent();
-      return content.items.map((item: any) => item.str || "").join(" ");
-    }));
-    return pages.join(" ");
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch("/api/pdf-text", { method: "POST", body: form });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "The PDF could not be read.");
+    return result.text as string;
   }
   const { recognize } = await import("tesseract.js");
   return (await recognize(file, "eng")).data.text;
