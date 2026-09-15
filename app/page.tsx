@@ -191,7 +191,7 @@ const initials = (n: string) =>
     .slice(0, 2)
     .toUpperCase();
 const readDocumentText = async (file: File) => {
-  if (file.type === "application/pdf") {
+  if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
     const form = new FormData();
     form.append("file", file);
     const response = await fetch("/api/pdf-text", { method: "POST", body: form });
@@ -1006,7 +1006,7 @@ function OrderModal({ order, clients, catalogue, close, save }: { order: Order |
   const updateProduct = (index: number, key: keyof ProductLine, value: string | number) => setProducts(products.map((item, i) => i === index ? { ...item, [key]: value } : item));
   const selectClient = (name: string) => { const client = clients.find((item) => item.name === name); setF({ ...f, client: name, city: client?.city || "", avatar: client?.avatar || initials(name) }); };
   const scanDocument = async (file: File) => {
-    setPreview(file.type === "application/pdf" ? "" : URL.createObjectURL(file)); setScanState("scanning"); setScanNote("Reading document and finding product lines…");
+    setPreview((file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) ? "" : URL.createObjectURL(file)); setScanState("scanning"); setScanNote("Reading document and finding product lines…");
     try {
       const text = (await readDocumentText(file)).replace(/\s+/g, " ");
       const matchedClient = clients.find((client) => text.toLowerCase().includes(client.name.toLowerCase()));
@@ -1036,10 +1036,10 @@ function CataloguePanel({ items, edit, addDrafts }: { items: CatalogueItem[]; ed
       const text = await readDocumentText(file);
       const skus = [...new Set((text.toUpperCase().match(/\b[A-Z]{1,4}[- ]?\d{2,8}\b/g) || []).map((sku) => sku.replace(" ", "-")))];
       if (!skus.length) throw new Error("No SKUs found");
-      const image = file.type === "application/pdf" ? "" : URL.createObjectURL(file);
+      const image = (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) ? "" : URL.createObjectURL(file);
       addDrafts(skus.map((sku, index) => ({ id: Date.now() + index, sku, name: `New product — ${sku}`, unitPrice: 0, category: "Uncategorised", image })));
       setScanState("ready"); setNotice(`${skus.length} SKU draft${skus.length === 1 ? "" : "s"} added. Open each card to add its product name and price.`);
-    } catch { setScanState("error"); setNotice("No SKU IDs were found. Please use a sharp, readable catalogue image and try again."); }
+    } catch (error) { setScanState("error"); setNotice(error instanceof Error ? error.message : "The catalogue file could not be read."); }
   };
   return <section className="catalogue-page"><div className="catalogue-top"><div><span className="overline">PRODUCT LIBRARY</span><h2>Your catalogue, ready for order matching.</h2><p>Upload individual product photos, or scan a complete catalogue image or PDF to create SKU drafts quickly.</p></div><div className="catalogue-count"><b>{items.length}</b><span>active SKUs</span></div></div><section className="catalogue-actions"><label className="catalogue-scan"><div className="scan-orb"><ScanText size={20}/></div><div><b>Scan catalogue image or PDF</b><p>Read SKU IDs from a complete catalogue page.</p></div><span className="scan-cta">Upload file <ImagePlus size={14}/></span><input type="file" accept="image/*,application/pdf" onChange={(e) => importCatalogueImage(e.target.files?.[0])} disabled={scanState === "scanning"}/></label><div className="catalogue-tip"><b>How it works</b><p>Catalogue SKUs are matched automatically when you scan an incoming order image or PDF.</p></div></section>{scanState !== "idle" && <div className={`catalogue-notice ${scanState}`}><ScanText size={16}/>{notice}</div>}<div className="catalogue-toolbar"><div><h3>Products</h3><span>{items.length} shown</span></div><span>Click a product to edit its image, SKU, and price.</span></div><section className="catalogue-grid">{items.map((item) => <article className="catalogue-card" key={item.id} onClick={() => edit(item)}><div className="catalogue-image">{item.image ? <img src={item.image} alt={item.name}/> : <PackageCheck size={27}/>}<span>{item.category}</span></div><div className="catalogue-info"><small>{item.sku}</small><h3>{item.name}</h3><p>{item.unitPrice ? `${money(item.unitPrice)} / pc` : "Price to be added"}</p><button className="edit-product"><Pencil size={13}/> Edit product</button></div></article>)}{!items.length && <div className="empty">No catalogue products match your search.</div>}</section></section>;
 }
