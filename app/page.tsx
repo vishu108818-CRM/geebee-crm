@@ -4,6 +4,9 @@ import "./product-lines.css";
 import "./catalogue.css";
 import "./catalogue-v2.css";
 import "./catalogue-delete.css";
+import "./auth.css";
+import { supabase } from "./lib/supabase";
+import type { Session } from "@supabase/supabase-js";
 import {
   Bell,
   Boxes,
@@ -12,7 +15,6 @@ import {
   FileText,
   ImagePlus,
   LayoutDashboard,
-  MoreHorizontal,
   PackageCheck,
   Pencil,
   Plus,
@@ -234,6 +236,19 @@ function Pill({ value }: { value: string }) {
     </span>
   );
 }
+function SignInScreen() {
+  const [email, setEmail] = useState("vishu108818@gmail.com");
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const sendMagicLink = async () => {
+    if (!supabase || !email.trim()) return;
+    setSending(true); setMessage("");
+    const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: window.location.origin } });
+    setSending(false);
+    setMessage(error ? error.message : "Secure sign-in link sent. Open it from your email to continue.");
+  };
+  return <main className="auth-screen"><section className="auth-card"><div className="auth-logo">G</div><span className="overline">GEEBEE IMPORTS</span><h1>Private operations workspace</h1><p>Enter your approved email and we’ll send a secure, password-free sign-in link.</p><label>Work email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} onKeyDown={(event) => event.key === "Enter" && sendMagicLink()} placeholder="you@company.com" autoComplete="email"/></label><button className="primary auth-submit" type="button" disabled={sending} onClick={sendMagicLink}>{sending ? "Sending secure link…" : "Send secure sign-in link"}</button>{message && <div className="auth-message">{message}</div>}<small>Only authenticated GeeBee users can access this CRM.</small></section></main>;
+}
 export default function Home() {
   const [section, setSection] = useState("Overview"),
     [search, setSearch] = useState(""),
@@ -242,6 +257,10 @@ export default function Home() {
     [invoices, setInvoices] = useState(seedInvoices),
     [catalogue, setCatalogue] = useState(seedCatalogue),
     [storageReady, setStorageReady] = useState(false),
+    [session, setSession] = useState<Session | null>(null),
+    [authReady, setAuthReady] = useState(false),
+    [cloudReady, setCloudReady] = useState(false),
+    [cloudError, setCloudError] = useState(""),
     [modal, setModal] = useState<"order" | "client" | "invoice" | "catalogue" | null>(null),
     [editing, setEditing] = useState<any>(null),
     [toast, setToast] = useState("");
@@ -262,6 +281,41 @@ export default function Home() {
     if (!storageReady) return;
     window.localStorage.setItem(storageKey, JSON.stringify({ orders, clients, invoices, catalogue }));
   }, [orders, clients, invoices, catalogue, storageReady]);
+  useEffect(() => {
+    if (!supabase) { setAuthReady(true); return; }
+    supabase.auth.getSession().then(({ data }) => { setSession(data.session); setAuthReady(true); });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession));
+    return () => listener.subscription.unsubscribe();
+  }, []);
+  useEffect(() => {
+    const cloud = supabase;
+    if (!cloud || !authReady || !session || !storageReady) return;
+    let cancelled = false;
+    const loadCloudWorkspace = async () => {
+      const { data: row, error } = await cloud.from("crm_workspaces").select("data").eq("owner_id", session.user.id).maybeSingle();
+      if (cancelled) return;
+      if (error) { setCloudError("Cloud workspace is not ready yet. Please run the supplied Supabase setup script."); return; }
+      const current = { orders, clients, invoices, catalogue };
+      if (row?.data) {
+        const saved = row.data as Partial<SavedCrmData>;
+        setOrders(Array.isArray(saved.orders) ? saved.orders : current.orders); setClients(Array.isArray(saved.clients) ? saved.clients : current.clients); setInvoices(Array.isArray(saved.invoices) ? saved.invoices : current.invoices); setCatalogue(Array.isArray(saved.catalogue) ? saved.catalogue : current.catalogue);
+      } else {
+        const { error: createError } = await cloud.from("crm_workspaces").upsert({ owner_id: session.user.id, data: current, updated_at: new Date().toISOString() });
+        if (createError) { setCloudError("Cloud workspace is not ready yet. Please run the supplied Supabase setup script."); return; }
+      }
+      setCloudError(""); setCloudReady(true);
+    };
+    loadCloudWorkspace();
+    return () => { cancelled = true; };
+  }, [authReady, session, storageReady]);
+  useEffect(() => {
+    const cloud = supabase;
+    if (!cloud || !session || !cloudReady) return;
+    const saveTimer = window.setTimeout(() => {
+      cloud.from("crm_workspaces").upsert({ owner_id: session.user.id, data: { orders, clients, invoices, catalogue }, updated_at: new Date().toISOString() }).then(({ error }) => { if (error) setCloudError("A change could not be saved to the cloud. Your local copy is still safe."); });
+    }, 650);
+    return () => window.clearTimeout(saveTimer);
+  }, [orders, clients, invoices, catalogue, session, cloudReady]);
   const shown = useMemo(
     () =>
       orders.filter((o) =>
@@ -284,6 +338,9 @@ export default function Home() {
     [CircleDollarSign, "Payments", "2"],
     [ShipWheel, "Shipments"],
   ] as const;
+  if (!authReady) return <div className="auth-screen"><div className="auth-card"><b>Opening secure workspace…</b></div></div>;
+  if (!supabase) return <div className="auth-screen"><div className="auth-card"><span className="overline">GEEBEE CRM</span><h1>Cloud connection needed</h1><p>Add the Supabase environment settings to open this private workspace.</p></div></div>;
+  if (!session) return <SignInScreen />;
   return (
     <main>
       <aside className="sidebar">
@@ -320,10 +377,10 @@ export default function Home() {
           <div className="profile">
             <div className="avatar">RM</div>
             <div>
-              <b>Rahul Maggu</b>
-              <span>Administrator</span>
+              <b>{session.user.email}</b>
+              <span>{cloudReady ? "Cloud workspace synced" : "Connecting to cloud…"}</span>
             </div>
-            <MoreHorizontal size={18} />
+            <button className="sign-out" type="button" onClick={() => supabase?.auth.signOut()}>Sign out</button>
           </div>
         </div>
       </aside>
@@ -344,6 +401,7 @@ export default function Home() {
           </button>
           <div className="header-avatar">RM</div>
         </header>
+        {cloudError && <div className="cloud-warning">{cloudError}</div>}
         <div className="page-head">
           <div>
             <div className="eyebrow">MONDAY, 15 SEPTEMBER 2026</div>
