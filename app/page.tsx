@@ -1,6 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import "./product-lines.css";
+import "./catalogue.css";
 import {
   Bell,
   Boxes,
@@ -21,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 type ProductLine = { product: string; sku: string; quantity: number; unitPrice: number };
+type CatalogueItem = { id: number; name: string; sku: string; unitPrice: number; category: string; image: string };
 type Order = {
   id: string;
   client: string;
@@ -170,6 +172,12 @@ const seedInvoices: Invoice[] = [
     status: "Paid",
   },
 ];
+const seedCatalogue: CatalogueItem[] = [
+  { id: 1, name: "Party Goggles", sku: "AB-981", unitPrice: 12, category: "Party Props", image: "" },
+  { id: 2, name: "Balloon Pump", sku: "AB-971", unitPrice: 17, category: "Balloons", image: "" },
+  { id: 3, name: "Cake Crown", sku: "AB-821", unitPrice: 42, category: "Cake Accessories", image: "" },
+  { id: 4, name: "LED Light 10cm", sku: "AB-871", unitPrice: 94, category: "Decorations", image: "" },
+];
 const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 const linesFor = (order: Order): ProductLine[] => order.products || [{ product: order.product, sku: order.sku, quantity: order.quantity, unitPrice: order.unitPrice }];
 const orderTotal = (order: Order) => linesFor(order).reduce((total, line) => total + line.quantity * line.unitPrice, 0);
@@ -194,14 +202,15 @@ export default function Home() {
     [orders, setOrders] = useState(seedOrders),
     [clients, setClients] = useState(seedClients),
     [invoices, setInvoices] = useState(seedInvoices),
-    [modal, setModal] = useState<"order" | "client" | "invoice" | null>(null),
+    [catalogue, setCatalogue] = useState(seedCatalogue),
+    [modal, setModal] = useState<"order" | "client" | "invoice" | "catalogue" | null>(null),
     [editing, setEditing] = useState<any>(null),
     [toast, setToast] = useState("");
   const flash = (m: string) => {
       setToast(m);
       setTimeout(() => setToast(""), 2600);
     },
-    show = (k: "order" | "client" | "invoice", d?: any) => {
+    show = (k: "order" | "client" | "invoice" | "catalogue", d?: any) => {
       setEditing(d || null);
       setModal(k);
     };
@@ -218,6 +227,7 @@ export default function Home() {
     [LayoutDashboard, "Overview"],
     [Users, "Clients", String(clients.length)],
     [Boxes, "Orders", String(orders.length)],
+    [PackageCheck, "Catalogue", String(catalogue.length)],
     [
       FileText,
       "Invoices",
@@ -296,17 +306,17 @@ export default function Home() {
                 : `Create, update and review your ${section.toLowerCase()} records.`}
             </p>
           </div>
-          {["Orders", "Clients", "Invoices"].includes(section) && (
+          {["Orders", "Clients", "Invoices", "Catalogue"].includes(section) && (
             <button
               className="primary"
               onClick={() =>
                 show(
-                  section.slice(0, -1).toLowerCase() as
-                    "order" | "client" | "invoice",
+                  (section === "Catalogue" ? "catalogue" : section.slice(0, -1).toLowerCase()) as
+                    "order" | "client" | "invoice" | "catalogue",
                 )
               }
             >
-              <Plus size={18} /> New {section.slice(0, -1)}
+              <Plus size={18} /> New {section === "Catalogue" ? "product" : section.slice(0, -1)}
             </button>
           )}
           {section === "Overview" && (
@@ -346,6 +356,12 @@ export default function Home() {
             edit={(i) => show("invoice", i)}
           />
         )}{" "}
+        {section === "Catalogue" && (
+          <CataloguePanel
+            items={catalogue.filter((item) => `${item.name} ${item.sku} ${item.category}`.toLowerCase().includes(search.toLowerCase()))}
+            edit={(item) => show("catalogue", item)}
+          />
+        )}{" "}
         {["Payments", "Shipments", "Settings"].includes(section) && (
           <section className="panel coming">
             <div className="modal-mark">
@@ -363,6 +379,7 @@ export default function Home() {
         <OrderModal
           order={editing}
           clients={clients}
+          catalogue={catalogue}
           close={() => setModal(null)}
           save={(o) => {
             setOrders((x) =>
@@ -410,6 +427,17 @@ export default function Home() {
                 ? "Invoice updated successfully"
                 : "New invoice created successfully",
             );
+          }}
+        />
+      )}
+      {modal === "catalogue" && (
+        <CatalogueModal
+          item={editing}
+          close={() => setModal(null)}
+          save={(item) => {
+            setCatalogue((current) => editing ? current.map((existing) => existing.id === editing.id ? item : existing) : [...current, item]);
+            setModal(null);
+            flash(editing ? "Catalogue product updated" : "Catalogue product added");
           }}
         />
       )}
@@ -953,7 +981,7 @@ function LegacyMultiProductOrderModal({ order, clients, close, save }: { order: 
   const saveOrder = () => { const first = products[0]; save({ ...f, product: first.product, sku: first.sku, quantity: first.quantity, unitPrice: first.unitPrice, products }); };
   return <Shell close={close}><div className="modal-mark"><PackageCheck size={22} /></div><h2>{order ? "Edit order" : "Create a new order"}</h2><p>Add as many product lines as this order needs.</p><label>Client<select value={f.client} onChange={(e) => selectClient(e.target.value)} required><option value="" disabled>Select a client</option>{clients.map((client) => <option key={client.id}>{client.name}</option>)}</select></label><div className="product-lines"><div className="line-heading"><b>Product lines</b><span>{products.length} item{products.length !== 1 ? "s" : ""}</span></div>{products.map((item, index) => <div className="product-line" key={index}><div className="line-number">{index + 1}</div><div className="line-fields"><input aria-label="Product name" value={item.product} onChange={(e) => updateProduct(index, "product", e.target.value)} placeholder="Product name" required /><input aria-label="SKU ID" value={item.sku} onChange={(e) => updateProduct(index, "sku", e.target.value)} placeholder="SKU ID" required /><input aria-label="Quantity" type="number" min="1" value={item.quantity || ""} onChange={(e) => updateProduct(index, "quantity", Number(e.target.value))} placeholder="Qty" required /><input aria-label="Unit price" type="number" min="0" value={item.unitPrice || ""} onChange={(e) => updateProduct(index, "unitPrice", Number(e.target.value))} placeholder="Price ₹" required /></div><b className="line-total">{money(item.quantity * item.unitPrice)}</b>{products.length > 1 && <button type="button" className="remove-line" onClick={() => setProducts(products.filter((_, i) => i !== index))}>×</button>}</div>)}<button type="button" className="add-line" onClick={() => setProducts([...products, { product: "", sku: "", quantity: 0, unitPrice: 0 }])}><Plus size={15} /> Add another product</button></div><div className="order-total"><span>Order total</span><b>{money(total)}</b></div><div className="form-row"><label>Expected arrival<input type="date" value={f.eta} onChange={(e) => setF({ ...f, eta: e.target.value })} required /></label><label>Status<select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>{["Confirmed", "Production", "In transit", "Customs clearance", "Delivered"].map((value) => <option key={value}>{value}</option>)}</select></label></div><label>Payment status<select value={f.payment} onChange={(e) => setF({ ...f, payment: e.target.value })}>{["Partial", "Paid", "Overdue"].map((value) => <option key={value}>{value}</option>)}</select></label><button className="primary modal-submit" type="button" onClick={saveOrder}>Save order</button></Shell>;
 }
-function OrderModal({ order, clients, close, save }: { order: Order | null; clients: Client[]; close: () => void; save: (o: Order) => void }) {
+function OrderModal({ order, clients, catalogue, close, save }: { order: Order | null; clients: Client[]; catalogue: CatalogueItem[]; close: () => void; save: (o: Order) => void }) {
   const base = order || { id: "GB-24092", client: "", city: "", eta: "", status: "Confirmed", payment: "Partial", avatar: "" };
   const [f, setF] = useState(base);
   const [products, setProducts] = useState<ProductLine[]>(order?.products || (order ? [{ product: order.product, sku: order.sku, quantity: order.quantity, unitPrice: order.unitPrice }] : [{ product: "", sku: "", quantity: 0, unitPrice: 0 }]));
@@ -975,12 +1003,24 @@ function OrderModal({ order, clients, close, save }: { order: Order | null; clie
       const quantity = Number(text.match(/(?:qty|quantity)\s*[:x-]?\s*(\d+)/i)?.[1] || 0);
       const unitPrice = Number(text.match(/(?:unit\s*price|rate|price)\s*[:₹Rs.-]?\s*([\d,]+)/i)?.[1]?.replaceAll(",", "") || 0);
       const name = text.match(/(?:product|description|item)\s*[:#-]?\s*([A-Za-z][A-Za-z0-9 /&.-]{2,50})/i)?.[1]?.trim() || file.name.replace(/\.[^.]+$/, "").replaceAll(/[-_]/g, " ");
-      setProducts([{ product: name, sku, quantity, unitPrice }]);
-      setScanState("ready"); setScanNote("Details were extracted. Please check the fields below before saving.");
+      const catalogueMatch = catalogue.find((item) => item.sku.replaceAll("-", "").toLowerCase() === sku.replaceAll("-", "").toLowerCase());
+      setProducts([{ product: catalogueMatch?.name || name, sku: catalogueMatch?.sku || sku, quantity, unitPrice: catalogueMatch?.unitPrice || unitPrice }]);
+      setScanState("ready"); setScanNote(catalogueMatch ? `Matched ${catalogueMatch.sku} from your catalogue. Please confirm quantity.` : "Details were extracted. Please check the fields below before saving.");
     } catch { setScanState("error"); setScanNote("We could not read this image. You can still enter the order manually."); }
   };
   const saveOrder = () => { const first = products[0]; save({ ...f, product: first.product, sku: first.sku, quantity: first.quantity, unitPrice: first.unitPrice, products }); };
   return <Shell close={close}><div className="order-modal-head"><div className="modal-mark"><PackageCheck size={22} /></div><div><span className="overline">ORDER WORKSPACE</span><h2>{order ? "Edit order" : "Create an order"}</h2><p>Capture a document or enter product lines yourself.</p></div></div><div className="document-capture"><div className="capture-copy"><div className="capture-icon"><ScanText size={19}/></div><div><b>Smart document capture</b><p>Upload a supplier PO, invoice or product-list image.</p></div></div><label className="upload-button"><ImagePlus size={15}/><span>{scanState === "scanning" ? "Reading image…" : "Upload image"}</span><input type="file" accept="image/*" onChange={(e) => e.target.files?.[0] && scanDocument(e.target.files[0])} disabled={scanState === "scanning"}/></label>{preview && <img className="document-preview" src={preview} alt="Uploaded document preview"/>}{scanState !== "idle" && <div className={`scan-feedback ${scanState}`}><ScanText size={15}/>{scanNote}</div>}</div><div className="modal-section-title">Order details</div><label>Client<select value={f.client} onChange={(e) => selectClient(e.target.value)} required><option value="" disabled>Select a client</option>{clients.map((client) => <option key={client.id}>{client.name}</option>)}</select></label><div className="product-lines"><div className="line-heading"><b>Product lines</b><span>{products.length} item{products.length !== 1 ? "s" : ""}</span></div>{products.map((item, index) => <div className="product-line" key={index}><div className="line-number">{index + 1}</div><div className="line-fields"><input aria-label="Product name" value={item.product} onChange={(e) => updateProduct(index, "product", e.target.value)} placeholder="Product name" required /><input aria-label="SKU ID" value={item.sku} onChange={(e) => updateProduct(index, "sku", e.target.value)} placeholder="SKU ID" required /><input aria-label="Quantity" type="number" min="1" value={item.quantity || ""} onChange={(e) => updateProduct(index, "quantity", Number(e.target.value))} placeholder="Qty" required /><input aria-label="Unit price" type="number" min="0" value={item.unitPrice || ""} onChange={(e) => updateProduct(index, "unitPrice", Number(e.target.value))} placeholder="Price ₹" required /></div><b className="line-total">{money(item.quantity * item.unitPrice)}</b>{products.length > 1 && <button type="button" className="remove-line" onClick={() => setProducts(products.filter((_, i) => i !== index))}>×</button>}</div>)}<button type="button" className="add-line" onClick={() => setProducts([...products, { product: "", sku: "", quantity: 0, unitPrice: 0 }])}><Plus size={15} /> Add product line</button></div><div className="order-total"><span>Order total</span><b>{money(total)}</b></div><div className="form-row"><label>Expected arrival<input type="date" value={f.eta} onChange={(e) => setF({ ...f, eta: e.target.value })} required /></label><label>Status<select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>{["Confirmed", "Production", "In transit", "Customs clearance", "Delivered"].map((value) => <option key={value}>{value}</option>)}</select></label></div><label>Payment status<select value={f.payment} onChange={(e) => setF({ ...f, payment: e.target.value })}>{["Partial", "Paid", "Overdue"].map((value) => <option key={value}>{value}</option>)}</select></label><button className="primary modal-submit" type="button" onClick={saveOrder}>Save order</button></Shell>;
+}
+function CataloguePanel({ items, edit }: { items: CatalogueItem[]; edit: (item: CatalogueItem) => void }) {
+  return <section className="catalogue-page"><section className="catalogue-hero"><div><span className="overline">YOUR PRODUCT LIBRARY</span><h2>Catalogue makes order capture reliable.</h2><p>Add your product images and SKU IDs once. Uploaded order images can then match the SKU to your approved product name and price.</p></div><div className="catalogue-stat"><b>{items.length}</b><span>catalogued SKUs</span></div></section><section className="catalogue-grid">{items.map((item) => <article className="catalogue-card" key={item.id}><div className="catalogue-image">{item.image ? <img src={item.image} alt={item.name}/> : <PackageCheck size={27}/>}<span>{item.category}</span></div><div className="catalogue-info"><small>{item.sku}</small><h3>{item.name}</h3><p>{money(item.unitPrice)} / pc</p><button className="edit-product" onClick={() => edit(item)}><Pencil size={13}/> Edit product</button></div></article>)}{!items.length && <div className="empty">No catalogue products match your search.</div>}</section></section>;
+}
+function CatalogueModal({ item, close, save }: { item: CatalogueItem | null; close: () => void; save: (item: CatalogueItem) => void }) {
+  const initial = item || { id: Date.now(), name: "", sku: "", unitPrice: 0, category: "Party Props", image: "" };
+  const [form, setForm] = useState(initial);
+  const [preview, setPreview] = useState(initial.image);
+  const update = (key: keyof CatalogueItem, value: string | number) => setForm({ ...form, [key]: value });
+  const chooseImage = (file?: File) => { if (!file) return; const image = URL.createObjectURL(file); setPreview(image); setForm({ ...form, image }); };
+  return <Shell close={close}><div className="order-modal-head"><div className="modal-mark"><PackageCheck size={22}/></div><div><span className="overline">PRODUCT CATALOGUE</span><h2>{item ? "Edit product" : "Add a product"}</h2><p>This SKU will be used to recognise future orders.</p></div></div><label className="catalogue-upload">{preview ? <img src={preview} alt="Product preview"/> : <><ImagePlus size={23}/><b>Upload product image</b><span>PNG or JPG</span></>}<input type="file" accept="image/*" onChange={(e) => chooseImage(e.target.files?.[0])}/></label><div className="form-row"><label>Product name<input value={form.name} onChange={(e) => update("name", e.target.value)} required/></label><label>SKU ID<input value={form.sku} onChange={(e) => update("sku", e.target.value.toUpperCase())} placeholder="AB-981" required/></label></div><div className="form-row"><label>Unit price (₹)<input type="number" min="0" value={form.unitPrice || ""} onChange={(e) => update("unitPrice", Number(e.target.value))} required/></label><label>Category<select value={form.category} onChange={(e) => update("category", e.target.value)}>{["Balloons", "Party Props", "Cake Accessories", "Decorations", "Themed Parties"].map((value) => <option key={value}>{value}</option>)}</select></label></div><button className="primary modal-submit" type="button" onClick={() => save(form)}>Save to catalogue</button></Shell>;
 }
 function ClientModal({
   client,
