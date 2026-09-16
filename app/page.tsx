@@ -282,6 +282,7 @@ export default function Home() {
     [isAdmin, setIsAdmin] = useState(false),
     [members, setMembers] = useState<WorkspaceMember[]>([]),
     [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]),
+    [clientProfile, setClientProfile] = useState<Client | null>(null),
     [modal, setModal] = useState<"order" | "client" | "invoice" | "catalogue" | null>(null),
     [editing, setEditing] = useState<any>(null),
     [toast, setToast] = useState("");
@@ -503,6 +504,7 @@ export default function Home() {
                 .includes(search.toLowerCase()),
             )}
             edit={(c) => show("client", c)}
+            view={(c) => setClientProfile(c)}
             remove={(ids) => { setClients((current) => current.filter((item) => !ids.includes(item.id))); logActivity("Removed client", "Clients", ids.join(", ")); flash(`${ids.length} client${ids.length === 1 ? "" : "s"} removed`); }}
           />
         )}{" "}
@@ -578,6 +580,7 @@ export default function Home() {
           }}
         />
       )}
+      {clientProfile && <ClientProfile client={clientProfile} orders={orders} invoices={invoices} catalogue={catalogue} close={() => setClientProfile(null)} edit={() => { setClientProfile(null); show("client", clientProfile); }} />}
       {modal === "invoice" && (
         <InvoiceModal
           invoice={editing}
@@ -877,10 +880,12 @@ function OrderTable({
 function Clients({
   clients,
   edit,
+  view,
   remove,
 }: {
   clients: Client[];
   edit: (c: Client) => void;
+  view: (c: Client) => void;
   remove: (ids: number[]) => void;
 }) {
   const [selected, setSelected] = useState<number[]>([]);
@@ -916,7 +921,7 @@ function Clients({
                 <td>
                   <div className="client">
                     <span className="mini-avatar">{c.avatar}</span>
-                    <b>{c.name}</b>
+                    <button className="client-name-link" type="button" onClick={() => view(c)}>{c.name}</button>
                   </div>
                 </td>
                 <td>{c.city}</td>
@@ -936,6 +941,23 @@ function Clients({
       </div>
     </section>
   );
+}
+function ClientProfile({ client, orders, invoices, catalogue, close, edit }: { client: Client; orders: Order[]; invoices: Invoice[]; catalogue: CatalogueItem[]; close: () => void; edit: () => void }) {
+  const clientOrders = orders.filter((order) => order.client === client.name);
+  const clientInvoices = invoices.filter((invoice) => invoice.client === client.name);
+  const amount = (value: string) => Number(value.replace(/[^0-9.]/g, "")) || 0;
+  const billed = clientInvoices.reduce((total, invoice) => total + amount(invoice.amount), 0);
+  const paid = clientInvoices.filter((invoice) => invoice.status === "Paid").reduce((total, invoice) => total + amount(invoice.amount), 0);
+  const outstanding = clientInvoices.filter((invoice) => invoice.status !== "Paid").reduce((total, invoice) => total + amount(invoice.amount), 0);
+  const rateName = (sku: string) => catalogue.find((item) => item.sku === sku)?.name || "Catalogue product";
+  return <Shell close={close}>
+    <div className="client-profile-head"><div className="profile-avatar-large">{client.avatar || initials(client.name)}</div><div><span className="overline">CLIENT ACCOUNT</span><h2>{client.name}</h2><p>{client.city} · {client.contact}</p></div><button className="edit-profile-btn" type="button" onClick={edit}><Pencil size={14}/> Edit client</button></div>
+    <div className="client-contact-grid"><div><span>Primary contact</span><b>{client.contact || "—"}</b></div><div><span>Phone</span><b>{client.phone || "—"}</b></div><div><span>Payment threshold</span><b>{client.credit || "—"}</b></div></div>
+    <div className="client-stat-grid"><div><span>Total billing</span><b>{money(billed)}</b><small>{clientInvoices.length} invoice{clientInvoices.length === 1 ? "" : "s"}</small></div><div><span>Paid</span><b>{money(paid)}</b><small>{clientInvoices.filter((invoice) => invoice.status === "Paid").length} settled</small></div><div><span>Outstanding</span><b className={outstanding ? "attention" : ""}>{money(outstanding)}</b><small>{clientInvoices.filter((invoice) => invoice.status !== "Paid").length} open invoice{clientInvoices.filter((invoice) => invoice.status !== "Paid").length === 1 ? "" : "s"}</small></div><div><span>Total order value</span><b>{money(clientOrders.reduce((total, order) => total + orderTotal(order), 0))}</b><small>{clientOrders.length} order{clientOrders.length === 1 ? "" : "s"}</small></div></div>
+    <section className="profile-section"><div className="profile-section-head"><h3>Special SKU rates</h3><span>{client.specialRates?.length || 0} negotiated</span></div>{client.specialRates?.length ? <div className="profile-rates">{client.specialRates.map((rate) => <article key={rate.sku}><div><b>{rate.sku}</b><span>{rateName(rate.sku)}</span></div><strong>{money(rate.rate)}</strong></article>)}</div> : <p className="profile-empty">No special rates set. Standard catalogue pricing applies.</p>}</section>
+    <section className="profile-section"><div className="profile-section-head"><h3>Invoices & payment status</h3><span>{clientInvoices.length} records</span></div>{clientInvoices.length ? <div className="profile-list">{clientInvoices.map((invoice) => <article key={invoice.id}><div><b>{invoice.id}</b><span>Order {invoice.order} · Due {invoice.due}</span></div><strong>{invoice.amount}</strong><Pill value={invoice.status}/></article>)}</div> : <p className="profile-empty">No invoices have been recorded for this client.</p>}</section>
+    <section className="profile-section"><div className="profile-section-head"><h3>Related orders</h3><span>{clientOrders.length} records</span></div>{clientOrders.length ? <div className="profile-list">{clientOrders.map((order) => <article key={order.id}><div><b>{order.id}</b><span>{order.product}{order.products && order.products.length > 1 ? ` +${order.products.length - 1} products` : ""} · ETA {order.eta}</span></div><strong>{money(orderTotal(order))}</strong><Pill value={order.payment}/></article>)}</div> : <p className="profile-empty">No orders have been recorded for this client.</p>}</section>
+  </Shell>;
 }
 function TeamAccess({ members, workspaceOwnerId, canManage, onChange, onAudit, auditEvents }: { members: WorkspaceMember[]; workspaceOwnerId: string | null; canManage: boolean; onChange: (members: WorkspaceMember[]) => void; onAudit: (action: string, module: string, details: string) => void; auditEvents: AuditEvent[] }) {
   const [email, setEmail] = useState("");
