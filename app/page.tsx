@@ -28,6 +28,10 @@ import {
 } from "lucide-react";
 type ProductLine = { product: string; sku: string; quantity: number; unitPrice: number };
 type CatalogueItem = { id: number; name: string; sku: string; unitPrice: number; category: string; image: string; description: string; cartonQty: string };
+type ClientSpecialRate = { sku: string; rate: number };
+const crmModules = ["Overview", "Clients", "Orders", "Catalogue", "Invoices", "Payments", "Shipments"] as const;
+type CrmModule = typeof crmModules[number];
+type WorkspaceMember = { id: number; workspace_owner_id: string; email: string; role: "admin" | "employee"; modules: CrmModule[] };
 type Order = {
   id: string;
   client: string;
@@ -50,6 +54,7 @@ type Client = {
   phone: string;
   credit: string;
   avatar: string;
+  specialRates?: ClientSpecialRate[];
 };
 type Invoice = {
   id: string;
@@ -196,10 +201,13 @@ const initials = (n: string) =>
     .toUpperCase();
 const readDocumentText = async (file: File) => {
   if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+    if (file.size > 4 * 1024 * 1024) throw new Error("This PDF is over the online upload limit. Please compress it below 4 MB, or split it into smaller catalogue pages.");
     const form = new FormData();
     form.append("file", file);
     const response = await fetch("/api/pdf-text", { method: "POST", body: form });
-    const result = await response.json();
+    const raw = await response.text();
+    let result: { text?: string; error?: string } = {};
+    try { result = JSON.parse(raw); } catch { throw new Error(response.status === 413 ? "This PDF is over the online upload limit. Please compress it below 4 MB, or split it into smaller catalogue pages." : "The PDF service returned an unexpected response. Please try again."); }
     if (!response.ok) throw new Error(result.error || "The PDF could not be read.");
     return result.text as string;
   }
@@ -243,7 +251,6 @@ function SignInScreen() {
   const [sending, setSending] = useState(false);
   const sendMagicLink = async () => {
     if (!supabase || !email.trim()) return;
-    if (!approvedWorkspaceEmails.includes(email.trim().toLowerCase())) { setMessage("This email is not approved for the GeeBee CRM workspace."); return; }
     setSending(true); setMessage("");
     const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: window.location.origin } });
     setSending(false);
@@ -263,6 +270,10 @@ export default function Home() {
     [authReady, setAuthReady] = useState(false),
     [cloudReady, setCloudReady] = useState(false),
     [cloudError, setCloudError] = useState(""),
+    [workspaceOwnerId, setWorkspaceOwnerId] = useState<string | null>(null),
+    [allowedModules, setAllowedModules] = useState<CrmModule[]>([...crmModules]),
+    [isAdmin, setIsAdmin] = useState(false),
+    [members, setMembers] = useState<WorkspaceMember[]>([]),
     [modal, setModal] = useState<"order" | "client" | "invoice" | "catalogue" | null>(null),
     [editing, setEditing] = useState<any>(null),
     [toast, setToast] = useState("");
@@ -291,10 +302,20 @@ export default function Home() {
   }, []);
   useEffect(() => {
     const cloud = supabase;
-    if (!cloud || !authReady || !session || !storageReady) return;
+    if (!cloud || !session?.user.email) return;
+    const email = session.user.email.toLowerCase();
+    if (approvedWorkspaceEmails.includes(email)) { setWorkspaceOwnerId(session.user.id); setAllowedModules([...crmModules]); setIsAdmin(true); return; }
+    cloud.from("crm_workspace_members").select("id, workspace_owner_id, email, role, modules").ilike("email", email).maybeSingle().then(({ data }) => {
+      if (!data) { setCloudError("Your email has not been granted access to this GeeBee workspace."); cloud.auth.signOut(); return; }
+      const member = data as WorkspaceMember; setWorkspaceOwnerId(member.workspace_owner_id); setAllowedModules(member.modules || ["Overview"]); setIsAdmin(member.role === "admin");
+    });
+  }, [session]);
+  useEffect(() => {
+    const cloud = supabase;
+    if (!cloud || !authReady || !session || !storageReady || !workspaceOwnerId) return;
     let cancelled = false;
     const loadCloudWorkspace = async () => {
-      const { data: row, error } = await cloud.from("crm_workspaces").select("data").eq("owner_id", session.user.id).maybeSingle();
+      const { data: row, error } = await cloud.from("crm_workspaces").select("data").eq("owner_id", workspaceOwnerId).maybeSingle();
       if (cancelled) return;
       if (error) { setCloudError("Cloud workspace is not ready yet. Please run the supplied Supabase setup script."); return; }
       const current = { orders, clients, invoices, catalogue };
@@ -302,22 +323,27 @@ export default function Home() {
         const saved = row.data as Partial<SavedCrmData>;
         setOrders(Array.isArray(saved.orders) ? saved.orders : current.orders); setClients(Array.isArray(saved.clients) ? saved.clients : current.clients); setInvoices(Array.isArray(saved.invoices) ? saved.invoices : current.invoices); setCatalogue(Array.isArray(saved.catalogue) ? saved.catalogue : current.catalogue);
       } else {
-        const { error: createError } = await cloud.from("crm_workspaces").upsert({ owner_id: session.user.id, data: current, updated_at: new Date().toISOString() });
+        const { error: createError } = await cloud.from("crm_workspaces").upsert({ owner_id: workspaceOwnerId, data: current, updated_at: new Date().toISOString() });
         if (createError) { setCloudError("Cloud workspace is not ready yet. Please run the supplied Supabase setup script."); return; }
       }
       setCloudError(""); setCloudReady(true);
     };
     loadCloudWorkspace();
     return () => { cancelled = true; };
-  }, [authReady, session, storageReady]);
+  }, [authReady, session, storageReady, workspaceOwnerId]);
   useEffect(() => {
     const cloud = supabase;
-    if (!cloud || !session || !cloudReady) return;
+    if (!cloud || !session || !cloudReady || !workspaceOwnerId) return;
     const saveTimer = window.setTimeout(() => {
-      cloud.from("crm_workspaces").upsert({ owner_id: session.user.id, data: { orders, clients, invoices, catalogue }, updated_at: new Date().toISOString() }).then(({ error }) => { if (error) setCloudError("A change could not be saved to the cloud. Your local copy is still safe."); });
+      cloud.from("crm_workspaces").update({ data: { orders, clients, invoices, catalogue }, updated_at: new Date().toISOString() }).eq("owner_id", workspaceOwnerId).then(({ error }) => { if (error) setCloudError("A change could not be saved to the cloud. Your local copy is still safe."); });
     }, 650);
     return () => window.clearTimeout(saveTimer);
-  }, [orders, clients, invoices, catalogue, session, cloudReady]);
+  }, [orders, clients, invoices, catalogue, session, cloudReady, workspaceOwnerId]);
+  useEffect(() => {
+    const cloud = supabase;
+    if (!cloud || !isAdmin || !workspaceOwnerId) return;
+    cloud.from("crm_workspace_members").select("id, workspace_owner_id, email, role, modules").eq("workspace_owner_id", workspaceOwnerId).then(({ data }) => setMembers((data || []) as WorkspaceMember[]));
+  }, [isAdmin, workspaceOwnerId]);
   const shown = useMemo(
     () =>
       orders.filter((o) =>
@@ -340,6 +366,7 @@ export default function Home() {
     [CircleDollarSign, "Payments", "2"],
     [ShipWheel, "Shipments"],
   ] as const;
+  const visibleNav = nav.filter(([, label]) => label === "Overview" || allowedModules.includes(label as CrmModule));
   if (!authReady) return <div className="auth-screen"><div className="auth-card"><b>Opening secure workspace…</b></div></div>;
   if (!supabase) return <div className="auth-screen"><div className="auth-card"><span className="overline">GEEBEE CRM</span><h1>Cloud connection needed</h1><p>Add the Supabase environment settings to open this private workspace.</p></div></div>;
   if (!session) return <SignInScreen />;
@@ -359,7 +386,7 @@ export default function Home() {
           <ChevronDown size={15} />
         </div>
         <nav>
-          {nav.map(([Icon, label, count]) => (
+          {visibleNav.map(([Icon, label, count]) => (
             <button
               key={label}
               className={section === label ? "active" : ""}
@@ -474,7 +501,8 @@ export default function Home() {
             remove={(ids) => { setCatalogue((current) => current.filter((item) => !ids.includes(item.id))); flash(`${ids.length} product${ids.length === 1 ? "" : "s"} removed from catalogue`); }}
           />
         )}{" "}
-        {["Payments", "Shipments", "Settings"].includes(section) && (
+        {section === "Settings" && <TeamAccess members={members} workspaceOwnerId={workspaceOwnerId} canManage={isAdmin} onChange={setMembers} />}{" "}
+        {["Payments", "Shipments"].includes(section) && (
           <section className="panel coming">
             <div className="modal-mark">
               <Settings size={22} />
@@ -509,6 +537,7 @@ export default function Home() {
       {modal === "client" && (
         <ClientModal
           client={editing}
+          catalogue={catalogue}
           close={() => setModal(null)}
           save={(c) => {
             setClients((x) =>
@@ -848,6 +877,7 @@ function Clients({
               <th>PRIMARY CONTACT</th>
               <th>PHONE</th>
               <th>PAYMENT THRESHOLD</th>
+              <th>SPECIAL SKU RATES</th>
               <th />
             </tr>
           </thead>
@@ -867,6 +897,7 @@ function Clients({
                 <td>
                   <b>{c.credit}</b>
                 </td>
+                <td>{c.specialRates?.length ? `${c.specialRates.length} SKU rate${c.specialRates.length === 1 ? "" : "s"}` : <span className="muted-cell">Standard</span>}</td>
                 <td>
                   <div className="record-actions"><button className="edit-btn" onClick={() => edit(c)} aria-label={`Edit ${c.name}`}><Pencil size={14} /></button><button className="row-delete" type="button" onClick={() => removeOne(c)} aria-label={`Remove ${c.name}`}><Trash2 size={14}/></button></div>
                 </td>
@@ -877,6 +908,26 @@ function Clients({
       </div>
     </section>
   );
+}
+function TeamAccess({ members, workspaceOwnerId, canManage, onChange }: { members: WorkspaceMember[]; workspaceOwnerId: string | null; canManage: boolean; onChange: (members: WorkspaceMember[]) => void }) {
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"admin" | "employee">("employee");
+  const [modules, setModules] = useState<CrmModule[]>(["Overview"]);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [message, setMessage] = useState("");
+  const toggle = (module: CrmModule) => setModules((current) => current.includes(module) ? current.filter((item) => item !== module) : [...current, module]);
+  const reset = () => { setEmail(""); setRole("employee"); setModules(["Overview"]); setEditingId(null); };
+  const save = async () => {
+    if (!supabase || !workspaceOwnerId || !email.trim()) return;
+    const payload = { workspace_owner_id: workspaceOwnerId, email: email.trim().toLowerCase(), role, modules: role === "admin" ? [...crmModules] : modules };
+    const { data, error } = await supabase.from("crm_workspace_members").upsert(payload, { onConflict: "workspace_owner_id,email" }).select("id, workspace_owner_id, email, role, modules").single();
+    if (error) { setMessage(error.message); return; }
+    onChange([...members.filter((member) => member.id !== editingId && member.email !== payload.email), data as WorkspaceMember]); setMessage("Access saved."); reset();
+  };
+  const editMember = (member: WorkspaceMember) => { setEditingId(member.id); setEmail(member.email); setRole(member.role); setModules(member.modules); setMessage(""); };
+  const remove = async (member: WorkspaceMember) => { if (!supabase || !window.confirm(`Remove ${member.email} from this workspace?`)) return; const { error } = await supabase.from("crm_workspace_members").delete().eq("id", member.id); if (error) { setMessage(error.message); return; } onChange(members.filter((item) => item.id !== member.id)); };
+  if (!canManage) return <section className="panel coming"><div className="modal-mark"><Settings size={22}/></div><h2>Workspace access</h2><p>Your administrator controls which modules you can use.</p></section>;
+  return <section className="panel team-access"><div className="panel-head"><div><h2>Team access</h2><p>Invite employees and choose the exact modules they can open.</p></div></div><div className="team-grid"><div className="team-form"><b>{editingId ? "Edit employee access" : "Add employee"}</b><label>Employee email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="employee@company.com"/></label><label>Role<select value={role} onChange={(event) => setRole(event.target.value as "admin" | "employee")}><option value="employee">Employee</option><option value="admin">Administrator</option></select></label>{role === "employee" && <div className="module-picker"><span>Allowed modules</span>{crmModules.map((module) => <label key={module}><input type="checkbox" checked={modules.includes(module)} onChange={() => toggle(module)}/>{module}</label>)}</div>}<div className="team-buttons"><button className="primary" type="button" onClick={save}>{editingId ? "Save access" : "Grant access"}</button>{editingId && <button type="button" className="text-btn" onClick={reset}>Cancel</button>}</div>{message && <p className="team-message">{message}</p>}</div><div className="member-list"><b>Current team</b>{!members.length && <p>No employees added yet.</p>}{members.map((member) => <article className="member-card" key={member.id}><div><b>{member.email}</b><small>{member.role === "admin" ? "Administrator — all modules" : member.modules.join(", ")}</small></div><div><button type="button" onClick={() => editMember(member)}>Edit</button><button type="button" onClick={() => remove(member)}>Remove</button></div></article>)}</div></div></section>;
 }
 function Invoices({
   invoices,
@@ -1128,8 +1179,14 @@ function OrderModal({ order, clients, catalogue, close, save }: { order: Order |
   const [scanState, setScanState] = useState<"idle" | "scanning" | "ready" | "error">("idle");
   const [scanNote, setScanNote] = useState("");
   const total = products.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-  const updateProduct = (index: number, key: keyof ProductLine, value: string | number) => setProducts(products.map((item, i) => i === index ? { ...item, [key]: value } : item));
-  const selectClient = (name: string) => { const client = clients.find((item) => item.name === name); setF({ ...f, client: name, city: client?.city || "", avatar: client?.avatar || initials(name) }); };
+  const specialRate = (clientName: string, sku: string) => clients.find((client) => client.name === clientName)?.specialRates?.find((item) => item.sku.replaceAll("-", "").toLowerCase() === sku.replaceAll("-", "").toLowerCase())?.rate;
+  const updateProduct = (index: number, key: keyof ProductLine, value: string | number) => setProducts(products.map((item, i) => {
+    if (i !== index) return item;
+    const updated = { ...item, [key]: value };
+    const rate = key === "sku" ? specialRate(f.client, String(value)) : undefined;
+    return rate === undefined ? updated : { ...updated, unitPrice: rate };
+  }));
+  const selectClient = (name: string) => { const client = clients.find((item) => item.name === name); setF({ ...f, client: name, city: client?.city || "", avatar: client?.avatar || initials(name) }); setProducts((current) => current.map((item) => ({ ...item, unitPrice: specialRate(name, item.sku) ?? item.unitPrice }))); };
   const scanDocument = async (file: File) => {
     setPreview((file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) ? "" : URL.createObjectURL(file)); setScanState("scanning"); setScanNote("Reading document and finding product lines…");
     try {
@@ -1141,7 +1198,7 @@ function OrderModal({ order, clients, catalogue, close, save }: { order: Order |
       const unitPrice = Number(text.match(/(?:unit\s*price|rate|price)\s*[:₹Rs.-]?\s*([\d,]+)/i)?.[1]?.replaceAll(",", "") || 0);
       const name = text.match(/(?:product|description|item)\s*[:#-]?\s*([A-Za-z][A-Za-z0-9 /&.-]{2,50})/i)?.[1]?.trim() || file.name.replace(/\.[^.]+$/, "").replaceAll(/[-_]/g, " ");
       const catalogueMatch = catalogue.find((item) => item.sku.replaceAll("-", "").toLowerCase() === sku.replaceAll("-", "").toLowerCase());
-      setProducts([{ product: catalogueMatch?.name || name, sku: catalogueMatch?.sku || sku, quantity, unitPrice: catalogueMatch?.unitPrice || unitPrice }]);
+      setProducts([{ product: catalogueMatch?.name || name, sku: catalogueMatch?.sku || sku, quantity, unitPrice: specialRate(matchedClient?.name || f.client, catalogueMatch?.sku || sku) ?? catalogueMatch?.unitPrice ?? unitPrice }]);
       setScanState("ready"); setScanNote(catalogueMatch ? `Matched ${catalogueMatch.sku} from your catalogue. Please confirm quantity.` : "Details were extracted. Please check the fields below before saving.");
     } catch { setScanState("error"); setScanNote("We could not read this image. You can still enter the order manually."); }
   };
@@ -1170,9 +1227,12 @@ function CataloguePanel({ items, edit, addDrafts, remove }: { items: CatalogueIt
     try {
       const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
       if (isPdf) {
+        if (file.size > 4 * 1024 * 1024) throw new Error("This PDF is over the online upload limit. Please compress it below 4 MB, or split it into smaller catalogue pages.");
         const form = new FormData(); form.append("file", file);
         const response = await fetch("/api/pdf-text", { method: "POST", body: form });
-        const result = await response.json();
+        const raw = await response.text();
+        let result: { products?: Omit<CatalogueItem, "id">[]; error?: string } = {};
+        try { result = JSON.parse(raw); } catch { throw new Error(response.status === 413 ? "This PDF is over the online upload limit. Please compress it below 4 MB, or split it into smaller catalogue pages." : "The PDF service returned an unexpected response. Please try again."); }
         if (!response.ok) throw new Error(result.error || "The catalogue PDF could not be read.");
         if (!result.products?.length) throw new Error("No product records were found in this catalogue PDF.");
         addDrafts(result.products.map((product: Omit<CatalogueItem, "id">, index: number) => ({ ...product, id: Date.now() + index })));
@@ -1199,10 +1259,12 @@ function CatalogueModal({ item, close, save }: { item: CatalogueItem | null; clo
 }
 function ClientModal({
   client,
+  catalogue,
   close,
   save,
 }: {
   client: Client | null;
+  catalogue: CatalogueItem[];
   close: () => void;
   save: (c: Client) => void;
 }) {
@@ -1214,9 +1276,12 @@ function ClientModal({
     phone: "",
     credit: "",
     avatar: "",
+    specialRates: [],
   };
-  const [f, setF] = useState(initial),
-    set = (k: keyof Client, v: string) => setF({ ...f, [k]: v });
+  const [f, setF] = useState<Client>({ ...initial, specialRates: initial.specialRates || [] });
+  const set = (k: keyof Client, v: string) => setF({ ...f, [k]: v });
+  const setRate = (sku: string, rate: number) => setF({ ...f, specialRates: [...(f.specialRates || []).filter((item) => item.sku !== sku), { sku, rate }] });
+  const removeRate = (sku: string) => setF({ ...f, specialRates: (f.specialRates || []).filter((item) => item.sku !== sku) });
   return (
     <Shell close={close}>
       <div className="modal-mark">
@@ -1267,6 +1332,10 @@ function ClientModal({
           required
         />
       </label>
+      <div className="modal-section-title">Special SKU rates</div>
+      <p className="special-rate-help">Set a negotiated unit price for this client. It will be applied automatically when that SKU is used in an order.</p>
+      <div className="special-rate-list">{(f.specialRates || []).map((item) => <div className="special-rate-row" key={item.sku}><b>{item.sku}</b><input aria-label={`Special rate for ${item.sku}`} type="number" min="0" value={item.rate} onChange={(event) => setRate(item.sku, Number(event.target.value))}/><button type="button" onClick={() => removeRate(item.sku)}>Remove</button></div>)}</div>
+      <div className="special-rate-add"><select defaultValue="" onChange={(event) => { const sku = event.target.value; if (sku && !(f.specialRates || []).some((item) => item.sku === sku)) { const product = catalogue.find((item) => item.sku === sku); setRate(sku, product?.unitPrice || 0); } event.currentTarget.value = ""; }}><option value="" disabled>Add catalogue SKU special rate</option>{catalogue.filter((item) => !(f.specialRates || []).some((rate) => rate.sku === item.sku)).map((item) => <option value={item.sku} key={item.id}>{item.sku} — {item.name}</option>)}</select></div>
       <button
         className="primary modal-submit"
         type="button"

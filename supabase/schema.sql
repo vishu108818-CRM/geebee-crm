@@ -14,3 +14,45 @@ for all
 to authenticated
 using ((select auth.uid()) = owner_id)
 with check ((select auth.uid()) = owner_id);
+
+-- Run the following access-control upgrade after the original table exists.
+create table if not exists public.crm_workspace_members (
+  id bigint generated always as identity primary key,
+  workspace_owner_id uuid not null references public.crm_workspaces(owner_id) on delete cascade,
+  email text not null,
+  role text not null default 'employee' check (role in ('admin', 'employee')),
+  modules text[] not null default array['Overview'],
+  created_at timestamptz not null default now(),
+  unique (workspace_owner_id, email)
+);
+
+alter table public.crm_workspace_members enable row level security;
+
+drop policy if exists "Workspace members can view their own access" on public.crm_workspace_members;
+create policy "Workspace members can view their own access"
+on public.crm_workspace_members for select to authenticated
+using (lower(email) = lower(coalesce(auth.jwt() ->> 'email', '')) or workspace_owner_id = auth.uid());
+
+drop policy if exists "Workspace owner manages member access" on public.crm_workspace_members;
+create policy "Workspace owner manages member access"
+on public.crm_workspace_members for all to authenticated
+using (workspace_owner_id = auth.uid())
+with check (workspace_owner_id = auth.uid());
+
+drop policy if exists "Workspace members can access shared CRM data" on public.crm_workspaces;
+create policy "Workspace members can access shared CRM data"
+on public.crm_workspaces for select to authenticated
+using (owner_id = auth.uid() or exists (
+  select 1 from public.crm_workspace_members m
+  where m.workspace_owner_id = crm_workspaces.owner_id
+  and lower(m.email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+));
+
+drop policy if exists "Workspace members can update shared CRM data" on public.crm_workspaces;
+create policy "Workspace members can update shared CRM data"
+on public.crm_workspaces for update to authenticated
+using (owner_id = auth.uid() or exists (
+  select 1 from public.crm_workspace_members m
+  where m.workspace_owner_id = crm_workspaces.owner_id
+  and lower(m.email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+));
