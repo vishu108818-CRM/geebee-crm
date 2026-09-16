@@ -32,6 +32,7 @@ type ClientSpecialRate = { sku: string; rate: number };
 const crmModules = ["Overview", "Clients", "Orders", "Catalogue", "Invoices", "Payments", "Shipments"] as const;
 type CrmModule = typeof crmModules[number];
 type WorkspaceMember = { id: number; workspace_owner_id: string; email: string; role: "admin" | "employee"; modules: CrmModule[] };
+type AuditEvent = { id: number; actor_email: string; action: string; module: string; details: string; created_at: string };
 type Order = {
   id: string;
   client: string;
@@ -245,18 +246,23 @@ function Pill({ value }: { value: string }) {
     </span>
   );
 }
-function SignInScreen() {
+function SignInScreen({ notice = "" }: { notice?: string }) {
   const [email, setEmail] = useState("vishu108818@gmail.com");
-  const [message, setMessage] = useState("");
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [message, setMessage] = useState(notice);
   const [sending, setSending] = useState(false);
   const sendMagicLink = async () => {
     if (!supabase || !email.trim()) return;
+    if (mode === "signup" && (!fullName.trim() || !phone.trim())) { setMessage("Please enter your full name and phone number."); return; }
     setSending(true); setMessage("");
-    const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: window.location.origin } });
+    if (mode === "signup") window.localStorage.setItem("geebee-signup-profile", JSON.stringify({ email: email.trim().toLowerCase(), fullName: fullName.trim(), phone: phone.trim() }));
+    const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: window.location.origin, data: mode === "signup" ? { full_name: fullName.trim(), phone: phone.trim() } : undefined } });
     setSending(false);
-    setMessage(error ? error.message : "Secure sign-in link sent. Open it from your email to continue.");
+    setMessage(error ? error.message : "Secure link sent. Open it from your email to continue.");
   };
-  return <main className="auth-screen"><section className="auth-card"><div className="auth-logo">G</div><span className="overline">GEEBEE IMPORTS</span><h1>Private operations workspace</h1><p>Enter your approved email and we’ll send a secure, password-free sign-in link.</p><label>Work email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} onKeyDown={(event) => event.key === "Enter" && sendMagicLink()} placeholder="you@company.com" autoComplete="email"/></label><button className="primary auth-submit" type="button" disabled={sending} onClick={sendMagicLink}>{sending ? "Sending secure link…" : "Send secure sign-in link"}</button>{message && <div className="auth-message">{message}</div>}<small>Only authenticated GeeBee users can access this CRM.</small></section></main>;
+  return <main className="auth-screen"><section className="auth-card"><div className="auth-logo">G</div><span className="overline">GEEBEE IMPORTS</span><h1>Private operations workspace</h1><div className="auth-tabs"><button className={mode === "signin" ? "active" : ""} type="button" onClick={() => { setMode("signin"); setMessage(""); }}>Sign in</button><button className={mode === "signup" ? "active" : ""} type="button" onClick={() => { setMode("signup"); setMessage(""); }}>Sign up</button></div><p>{mode === "signin" ? "Enter your work email and we’ll send a secure, password-free sign-in link." : "Create your secure account details. Your administrator must still grant workspace access."}</p>{mode === "signup" && <><label>Full name<input value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Your full name" autoComplete="name"/></label><label>Phone number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+91 98765 43210" autoComplete="tel"/></label></>}<label>Work email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} onKeyDown={(event) => event.key === "Enter" && sendMagicLink()} placeholder="you@company.com" autoComplete="email"/></label><button className="primary auth-submit" type="button" disabled={sending} onClick={sendMagicLink}>{sending ? "Sending secure link…" : mode === "signup" ? "Create account and send link" : "Send secure sign-in link"}</button>{message && <div className={message.toLowerCase().includes("sent") ? "auth-message" : "auth-message warning"}>{message}</div>}<small>Only users granted access by a GeeBee administrator can open the CRM.</small></section></main>;
 }
 export default function Home() {
   const [section, setSection] = useState("Overview"),
@@ -270,10 +276,12 @@ export default function Home() {
     [authReady, setAuthReady] = useState(false),
     [cloudReady, setCloudReady] = useState(false),
     [cloudError, setCloudError] = useState(""),
+    [accessNotice, setAccessNotice] = useState(""),
     [workspaceOwnerId, setWorkspaceOwnerId] = useState<string | null>(null),
     [allowedModules, setAllowedModules] = useState<CrmModule[]>([...crmModules]),
     [isAdmin, setIsAdmin] = useState(false),
     [members, setMembers] = useState<WorkspaceMember[]>([]),
+    [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]),
     [modal, setModal] = useState<"order" | "client" | "invoice" | "catalogue" | null>(null),
     [editing, setEditing] = useState<any>(null),
     [toast, setToast] = useState("");
@@ -285,6 +293,13 @@ export default function Home() {
       setEditing(d || null);
       setModal(k);
     };
+  const logActivity = (action: string, module: string, details: string) => {
+    const cloud = supabase;
+    if (!cloud || !workspaceOwnerId || !session?.user.email) return;
+    const event = { id: Date.now(), workspace_owner_id: workspaceOwnerId, actor_email: session.user.email, action, module, details, created_at: new Date().toISOString() };
+    setAuditEvents((current) => [event, ...current].slice(0, 100));
+    cloud.from("crm_audit_events").insert({ workspace_owner_id: event.workspace_owner_id, actor_email: event.actor_email, action, module, details }).then(({ error }) => { if (error) console.warn("Could not record activity", error.message); });
+  };
   useEffect(() => {
     const saved = loadCrmData();
     setOrders(saved.orders); setClients(saved.clients); setInvoices(saved.invoices); setCatalogue(saved.catalogue);
@@ -304,9 +319,13 @@ export default function Home() {
     const cloud = supabase;
     if (!cloud || !session?.user.email) return;
     const email = session.user.email.toLowerCase();
+    const draft = typeof window !== "undefined" ? window.localStorage.getItem("geebee-signup-profile") : null;
+    let profile: { fullName?: string; phone?: string } = {};
+    try { profile = draft ? JSON.parse(draft) : {}; } catch { /* ignore an invalid local profile */ }
+    cloud.from("crm_profiles").upsert({ user_id: session.user.id, email: session.user.email, full_name: profile.fullName || session.user.user_metadata?.full_name || "", phone: profile.phone || session.user.user_metadata?.phone || "" }, { onConflict: "user_id" }).then(() => { if (draft) window.localStorage.removeItem("geebee-signup-profile"); });
     if (approvedWorkspaceEmails.includes(email)) { setWorkspaceOwnerId(session.user.id); setAllowedModules([...crmModules]); setIsAdmin(true); return; }
     cloud.from("crm_workspace_members").select("id, workspace_owner_id, email, role, modules").ilike("email", email).maybeSingle().then(({ data }) => {
-      if (!data) { setCloudError("Your email has not been granted access to this GeeBee workspace."); cloud.auth.signOut(); return; }
+      if (!data) { setAccessNotice("Your account is awaiting access approval from a GeeBee administrator."); cloud.auth.signOut(); return; }
       const member = data as WorkspaceMember; setWorkspaceOwnerId(member.workspace_owner_id); setAllowedModules(member.modules || ["Overview"]); setIsAdmin(member.role === "admin");
     });
   }, [session]);
@@ -344,6 +363,11 @@ export default function Home() {
     if (!cloud || !isAdmin || !workspaceOwnerId) return;
     cloud.from("crm_workspace_members").select("id, workspace_owner_id, email, role, modules").eq("workspace_owner_id", workspaceOwnerId).then(({ data }) => setMembers((data || []) as WorkspaceMember[]));
   }, [isAdmin, workspaceOwnerId]);
+  useEffect(() => {
+    const cloud = supabase;
+    if (!cloud || !isAdmin || !workspaceOwnerId) return;
+    cloud.from("crm_audit_events").select("id, actor_email, action, module, details, created_at").eq("workspace_owner_id", workspaceOwnerId).order("created_at", { ascending: false }).limit(100).then(({ data }) => setAuditEvents((data || []) as AuditEvent[]));
+  }, [isAdmin, workspaceOwnerId]);
   const shown = useMemo(
     () =>
       orders.filter((o) =>
@@ -369,7 +393,7 @@ export default function Home() {
   const visibleNav = nav.filter(([, label]) => label === "Overview" || allowedModules.includes(label as CrmModule));
   if (!authReady) return <div className="auth-screen"><div className="auth-card"><b>Opening secure workspace…</b></div></div>;
   if (!supabase) return <div className="auth-screen"><div className="auth-card"><span className="overline">GEEBEE CRM</span><h1>Cloud connection needed</h1><p>Add the Supabase environment settings to open this private workspace.</p></div></div>;
-  if (!session) return <SignInScreen />;
+  if (!session) return <SignInScreen notice={accessNotice} />;
   return (
     <main>
       <aside className="sidebar">
@@ -469,7 +493,7 @@ export default function Home() {
           />
         )}{" "}
         {section === "Orders" && (
-          <Orders orders={shown} edit={(o) => show("order", o)} remove={(ids) => { setOrders((current) => current.filter((item) => !ids.includes(item.id))); flash(`${ids.length} order${ids.length === 1 ? "" : "s"} removed`); }} />
+          <Orders orders={shown} edit={(o) => show("order", o)} remove={(ids) => { setOrders((current) => current.filter((item) => !ids.includes(item.id))); logActivity("Removed order", "Orders", ids.join(", ")); flash(`${ids.length} order${ids.length === 1 ? "" : "s"} removed`); }} />
         )}{" "}
         {section === "Clients" && (
           <Clients
@@ -479,7 +503,7 @@ export default function Home() {
                 .includes(search.toLowerCase()),
             )}
             edit={(c) => show("client", c)}
-            remove={(ids) => { setClients((current) => current.filter((item) => !ids.includes(item.id))); flash(`${ids.length} client${ids.length === 1 ? "" : "s"} removed`); }}
+            remove={(ids) => { setClients((current) => current.filter((item) => !ids.includes(item.id))); logActivity("Removed client", "Clients", ids.join(", ")); flash(`${ids.length} client${ids.length === 1 ? "" : "s"} removed`); }}
           />
         )}{" "}
         {section === "Invoices" && (
@@ -490,18 +514,18 @@ export default function Home() {
                 .includes(search.toLowerCase()),
             )}
             edit={(i) => show("invoice", i)}
-            remove={(ids) => { setInvoices((current) => current.filter((item) => !ids.includes(item.id))); flash(`${ids.length} invoice${ids.length === 1 ? "" : "s"} removed`); }}
+            remove={(ids) => { setInvoices((current) => current.filter((item) => !ids.includes(item.id))); logActivity("Removed invoice", "Invoices", ids.join(", ")); flash(`${ids.length} invoice${ids.length === 1 ? "" : "s"} removed`); }}
           />
         )}{" "}
         {section === "Catalogue" && (
           <CataloguePanel
             items={catalogue.filter((item) => `${item.name} ${item.sku} ${item.category}`.toLowerCase().includes(search.toLowerCase()))}
             edit={(item) => show("catalogue", item)}
-            addDrafts={(drafts) => { setCatalogue((current) => [...current, ...drafts]); flash(`${drafts.length} SKU draft${drafts.length === 1 ? "" : "s"} added from catalogue image`); }}
-            remove={(ids) => { setCatalogue((current) => current.filter((item) => !ids.includes(item.id))); flash(`${ids.length} product${ids.length === 1 ? "" : "s"} removed from catalogue`); }}
+            addDrafts={(drafts) => { setCatalogue((current) => [...current, ...drafts]); logActivity("Imported catalogue products", "Catalogue", `${drafts.length} SKU draft(s)`); flash(`${drafts.length} SKU draft${drafts.length === 1 ? "" : "s"} added from catalogue image`); }}
+            remove={(ids) => { setCatalogue((current) => current.filter((item) => !ids.includes(item.id))); logActivity("Removed catalogue product", "Catalogue", ids.join(", ")); flash(`${ids.length} product${ids.length === 1 ? "" : "s"} removed from catalogue`); }}
           />
         )}{" "}
-        {section === "Settings" && <TeamAccess members={members} workspaceOwnerId={workspaceOwnerId} canManage={isAdmin} onChange={setMembers} />}{" "}
+        {section === "Settings" && <TeamAccess members={members} workspaceOwnerId={workspaceOwnerId} canManage={isAdmin} onChange={setMembers} onAudit={logActivity} auditEvents={auditEvents} />}{" "}
         {["Payments", "Shipments"].includes(section) && (
           <section className="panel coming">
             <div className="modal-mark">
@@ -526,6 +550,7 @@ export default function Home() {
               editing ? x.map((y) => (y.id === editing.id ? o : y)) : [...x, o],
             );
             setModal(null);
+            logActivity(editing ? "Updated order" : "Created order", "Orders", o.id);
             flash(
               editing
                 ? "Order updated successfully"
@@ -544,6 +569,7 @@ export default function Home() {
               editing ? x.map((y) => (y.id === editing.id ? c : y)) : [...x, c],
             );
             setModal(null);
+            logActivity(editing ? "Updated client" : "Created client", "Clients", c.name);
             flash(
               editing
                 ? "Client updated successfully"
@@ -563,6 +589,7 @@ export default function Home() {
               editing ? x.map((y) => (y.id === editing.id ? i : y)) : [...x, i],
             );
             setModal(null);
+            logActivity(editing ? "Updated invoice" : "Created invoice", "Invoices", i.id);
             flash(
               editing
                 ? "Invoice updated successfully"
@@ -578,6 +605,7 @@ export default function Home() {
           save={(item) => {
             setCatalogue((current) => editing ? current.map((existing) => existing.id === editing.id ? item : existing) : [...current, item]);
             setModal(null);
+            logActivity(editing ? "Updated catalogue product" : "Created catalogue product", "Catalogue", item.sku || item.name);
             flash(editing ? "Catalogue product updated" : "Catalogue product added");
           }}
         />
@@ -909,7 +937,7 @@ function Clients({
     </section>
   );
 }
-function TeamAccess({ members, workspaceOwnerId, canManage, onChange }: { members: WorkspaceMember[]; workspaceOwnerId: string | null; canManage: boolean; onChange: (members: WorkspaceMember[]) => void }) {
+function TeamAccess({ members, workspaceOwnerId, canManage, onChange, onAudit, auditEvents }: { members: WorkspaceMember[]; workspaceOwnerId: string | null; canManage: boolean; onChange: (members: WorkspaceMember[]) => void; onAudit: (action: string, module: string, details: string) => void; auditEvents: AuditEvent[] }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"admin" | "employee">("employee");
   const [modules, setModules] = useState<CrmModule[]>(["Overview"]);
@@ -922,12 +950,12 @@ function TeamAccess({ members, workspaceOwnerId, canManage, onChange }: { member
     const payload = { workspace_owner_id: workspaceOwnerId, email: email.trim().toLowerCase(), role, modules: role === "admin" ? [...crmModules] : modules };
     const { data, error } = await supabase.from("crm_workspace_members").upsert(payload, { onConflict: "workspace_owner_id,email" }).select("id, workspace_owner_id, email, role, modules").single();
     if (error) { setMessage(error.message); return; }
-    onChange([...members.filter((member) => member.id !== editingId && member.email !== payload.email), data as WorkspaceMember]); setMessage("Access saved."); reset();
+    onChange([...members.filter((member) => member.id !== editingId && member.email !== payload.email), data as WorkspaceMember]); onAudit(editingId ? "Updated employee access" : "Granted employee access", "Team access", `${payload.email} — ${payload.role}`); setMessage("Access saved."); reset();
   };
   const editMember = (member: WorkspaceMember) => { setEditingId(member.id); setEmail(member.email); setRole(member.role); setModules(member.modules); setMessage(""); };
-  const remove = async (member: WorkspaceMember) => { if (!supabase || !window.confirm(`Remove ${member.email} from this workspace?`)) return; const { error } = await supabase.from("crm_workspace_members").delete().eq("id", member.id); if (error) { setMessage(error.message); return; } onChange(members.filter((item) => item.id !== member.id)); };
+  const remove = async (member: WorkspaceMember) => { if (!supabase || !window.confirm(`Remove ${member.email} from this workspace?`)) return; const { error } = await supabase.from("crm_workspace_members").delete().eq("id", member.id); if (error) { setMessage(error.message); return; } onChange(members.filter((item) => item.id !== member.id)); onAudit("Removed employee access", "Team access", member.email); };
   if (!canManage) return <section className="panel coming"><div className="modal-mark"><Settings size={22}/></div><h2>Workspace access</h2><p>Your administrator controls which modules you can use.</p></section>;
-  return <section className="panel team-access"><div className="panel-head"><div><h2>Team access</h2><p>Invite employees and choose the exact modules they can open.</p></div></div><div className="team-grid"><div className="team-form"><b>{editingId ? "Edit employee access" : "Add employee"}</b><label>Employee email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="employee@company.com"/></label><label>Role<select value={role} onChange={(event) => setRole(event.target.value as "admin" | "employee")}><option value="employee">Employee</option><option value="admin">Administrator</option></select></label>{role === "employee" && <div className="module-picker"><span>Allowed modules</span>{crmModules.map((module) => <label key={module}><input type="checkbox" checked={modules.includes(module)} onChange={() => toggle(module)}/>{module}</label>)}</div>}<div className="team-buttons"><button className="primary" type="button" onClick={save}>{editingId ? "Save access" : "Grant access"}</button>{editingId && <button type="button" className="text-btn" onClick={reset}>Cancel</button>}</div>{message && <p className="team-message">{message}</p>}</div><div className="member-list"><b>Current team</b>{!members.length && <p>No employees added yet.</p>}{members.map((member) => <article className="member-card" key={member.id}><div><b>{member.email}</b><small>{member.role === "admin" ? "Administrator — all modules" : member.modules.join(", ")}</small></div><div><button type="button" onClick={() => editMember(member)}>Edit</button><button type="button" onClick={() => remove(member)}>Remove</button></div></article>)}</div></div></section>;
+  return <section className="panel team-access"><div className="panel-head"><div><h2>Team access</h2><p>Invite employees, choose their role and give only the modules they need.</p></div></div><div className="team-grid"><div className="team-form"><b>{editingId ? "Edit employee access" : "Add employee"}</b><label>Employee email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="employee@company.com"/></label><label>Role<select value={role} onChange={(event) => setRole(event.target.value as "admin" | "employee")}><option value="employee">Employee</option><option value="admin">Administrator</option></select></label>{role === "employee" && <div className="module-picker"><span>Allowed modules</span>{crmModules.map((module) => <label key={module}><input type="checkbox" checked={modules.includes(module)} onChange={() => toggle(module)}/>{module}</label>)}</div>}<div className="team-buttons"><button className="primary" type="button" onClick={save}>{editingId ? "Save access" : "Grant access"}</button>{editingId && <button type="button" className="text-btn" onClick={reset}>Cancel</button>}</div>{message && <p className="team-message">{message}</p>}</div><div className="member-list"><b>Current team</b>{!members.length && <p>No employees added yet.</p>}{members.map((member) => <article className="member-card" key={member.id}><div><b>{member.email}</b><small>{member.role === "admin" ? "Administrator — all modules" : member.modules.join(", ")}</small></div><div><button type="button" onClick={() => editMember(member)}>Edit</button><button type="button" onClick={() => remove(member)}>Remove</button></div></article>)}</div></div><div className="audit-trail"><div><h3>Recent activity</h3><p>Only administrators can see this log.</p></div>{!auditEvents.length && <p className="audit-empty">Changes made after this update will appear here.</p>}{auditEvents.map((event) => <article className="audit-event" key={event.id}><div className="audit-dot"/><div><b>{event.action}</b><span>{event.actor_email} · {event.module}{event.details ? ` · ${event.details}` : ""}</span></div><time>{new Date(event.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</time></article>)}</div></section>;
 }
 function Invoices({
   invoices,

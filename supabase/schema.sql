@@ -56,3 +56,29 @@ using (owner_id = auth.uid() or exists (
   where m.workspace_owner_id = crm_workspaces.owner_id
   and lower(m.email) = lower(coalesce(auth.jwt() ->> 'email', ''))
 ));
+
+create table if not exists public.crm_profiles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  full_name text not null default '',
+  phone text not null default '',
+  email text not null,
+  created_at timestamptz not null default now()
+);
+alter table public.crm_profiles enable row level security;
+drop policy if exists "Users manage their own profile" on public.crm_profiles;
+create policy "Users manage their own profile" on public.crm_profiles for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+create table if not exists public.crm_audit_events (
+  id bigint generated always as identity primary key,
+  workspace_owner_id uuid not null references public.crm_workspaces(owner_id) on delete cascade,
+  actor_email text not null,
+  action text not null,
+  module text not null,
+  details text not null default '',
+  created_at timestamptz not null default now()
+);
+alter table public.crm_audit_events enable row level security;
+drop policy if exists "Workspace can read audit history" on public.crm_audit_events;
+create policy "Workspace can read audit history" on public.crm_audit_events for select to authenticated using (workspace_owner_id = auth.uid() or exists (select 1 from public.crm_workspace_members m where m.workspace_owner_id = crm_audit_events.workspace_owner_id and lower(m.email) = lower(coalesce(auth.jwt() ->> 'email', ''))));
+drop policy if exists "Workspace can write audit history" on public.crm_audit_events;
+create policy "Workspace can write audit history" on public.crm_audit_events for insert to authenticated with check (workspace_owner_id = auth.uid() or exists (select 1 from public.crm_workspace_members m where m.workspace_owner_id = crm_audit_events.workspace_owner_id and lower(m.email) = lower(coalesce(auth.jwt() ->> 'email', ''))));
