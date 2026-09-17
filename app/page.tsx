@@ -10,6 +10,7 @@ import "./customer-management.css";
 import "./leads.css";
 import "./quotes.css";
 import "./products.css";
+import "./automation.css";
 import { supabase } from "./lib/supabase";
 import type { Session } from "@supabase/supabase-js";
 import {
@@ -229,6 +230,7 @@ const seedQuotes: Quote[] = [
   { id: "QT-1001", customer: "Celebration Corner", products: [{ product: "Party Goggles", sku: "AB-981", quantity: 500, unitPrice: 12, discount: 5 }], gst: 18, freight: 1200, validity: "2026-09-30", paymentTerms: "30 days", deliveryTerms: "Ex-warehouse, Mumbai", status: "Sent", createdAt: "2026-09-17" },
 ];
 const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
+const openWhatsApp = (phone: string, message: string) => window.open(`https://wa.me/${phone.replace(/\D/g, "")}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
 const availableStock = (product: CatalogueItem) => (product.openingStock || 0) + (product.purchasedStock || 0) - (product.orderedStock || 0) - (product.damagedStock || 0);
 const freeStock = (product: CatalogueItem) => availableStock(product) - (product.reservedStock || 0);
 const linesFor = (order: Order): ProductLine[] => order.products || [{ product: order.product, sku: order.sku, quantity: order.quantity, unitPrice: order.unitPrice }];
@@ -551,7 +553,7 @@ export default function Home() {
           />
         )}{" "}
         {section === "Orders" && (
-          <Orders orders={shown} edit={(o) => show("order", o)} remove={(ids) => { setOrders((current) => current.filter((item) => !ids.includes(item.id))); logActivity("Removed order", "Orders", ids.join(", ")); flash(`${ids.length} order${ids.length === 1 ? "" : "s"} removed`); }} />
+          <Orders orders={shown} clients={clients} edit={(o) => show("order", o)} remove={(ids) => { setOrders((current) => current.filter((item) => !ids.includes(item.id))); logActivity("Removed order", "Orders", ids.join(", ")); flash(`${ids.length} order${ids.length === 1 ? "" : "s"} removed`); }} />
         )}{" "}
         {section === "Clients" && (
           <Clients
@@ -574,6 +576,7 @@ export default function Home() {
                 .toLowerCase()
                 .includes(search.toLowerCase()),
             )}
+            clients={clients}
             edit={(i) => show("invoice", i)}
             remove={(ids) => { setInvoices((current) => current.filter((item) => !ids.includes(item.id))); logActivity("Removed invoice", "Invoices", ids.join(", ")); flash(`${ids.length} invoice${ids.length === 1 ? "" : "s"} removed`); }}
           />
@@ -587,7 +590,8 @@ export default function Home() {
           />
         )}{" "}
         {section === "Settings" && <TeamAccess members={members} workspaceOwnerId={workspaceOwnerId} canManage={isAdmin} onChange={setMembers} onAudit={logActivity} auditEvents={auditEvents} />}{" "}
-        {!(["Overview", "Orders", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Invoices", "Catalogue", "Settings"].includes(section)) && (
+        {section === "Notifications" && <AutomationPanel />}{" "}
+        {!(["Overview", "Orders", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Invoices", "Catalogue", "Settings", "Notifications"].includes(section)) && (
           <section className="panel coming">
             <div className="modal-mark">
               <ClipboardList size={22} />
@@ -821,10 +825,12 @@ function Overview({
 }
 function Orders({
   orders,
+  clients,
   edit,
   remove,
 }: {
   orders: Order[];
+  clients: Client[];
   edit: (o: Order) => void;
   remove: (ids: string[]) => void;
 }) {
@@ -836,7 +842,7 @@ function Orders({
           <p>Every product line can be edited at any time.</p>
         </div>
       </div>
-      <OrderTable orders={orders} edit={edit} remove={remove} />
+      <OrderTable orders={orders} edit={edit} remove={remove} sendWhatsApp={(order) => { const client = clients.find((item) => item.name === order.client); openWhatsApp(client?.whatsapp || client?.phone || "", `Dear ${order.client}, your GeeBee order #${order.id} is confirmed. Order value: ${money(orderTotal(order))}. We will keep you updated.`); }} />
     </section>
   );
 }
@@ -844,11 +850,13 @@ function OrderTable({
   orders,
   edit,
   remove,
+  sendWhatsApp,
   compact = false,
 }: {
   orders: Order[];
   edit: (o: Order) => void;
   remove?: (ids: string[]) => void;
+  sendWhatsApp?: (order: Order) => void;
   compact?: boolean;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
@@ -927,7 +935,7 @@ function OrderTable({
                 <Pill value={o.payment} />
               </td>
               <td>
-                <div className="record-actions"><button className="edit-btn" onClick={() => edit(o)} aria-label={`Edit ${o.id}`}><Pencil size={14} /></button>{selectable && <button className="row-delete" type="button" onClick={() => removeOne(o)} aria-label={`Remove ${o.id}`}><Trash2 size={14}/></button>}</div>
+                <div className="record-actions">{sendWhatsApp && <button className="whatsapp-action" type="button" onClick={() => sendWhatsApp(o)} aria-label={`Send WhatsApp confirmation for ${o.id}`}>WA</button>}<button className="edit-btn" onClick={() => edit(o)} aria-label={`Edit ${o.id}`}><Pencil size={14} /></button>{selectable && <button className="row-delete" type="button" onClick={() => removeOne(o)} aria-label={`Remove ${o.id}`}><Trash2 size={14}/></button>}</div>
               </td>
             </tr>
           ))}
@@ -1021,6 +1029,16 @@ const downloadQuotePdf = async (quote: Quote) => {
 function QuotesPanel({ quotes, edit, remove, convert }: { quotes: Quote[]; edit: (quote: Quote) => void; remove: (id: string) => void; convert: (quote: Quote) => void }) {
   return <section className="panel record-panel quotes-panel"><div className="panel-head"><div><span className="overline">QUOTATION MANAGEMENT</span><h2>Customer quotations</h2><p>Build commercial offers, share them, then convert accepted quotes into orders.</p></div></div><div className="table-wrap"><table className="records"><thead><tr><th>QUOTE</th><th>CUSTOMER</th><th>PRODUCTS</th><th>TOTAL</th><th>VALIDITY</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>{quotes.map((quote) => <tr key={quote.id}><td><b>{quote.id}</b></td><td>{quote.customer}</td><td>{quote.products.length} line{quote.products.length === 1 ? "" : "s"}</td><td><b>{money(quoteTotal(quote))}</b></td><td>{quote.validity || "—"}</td><td><Pill value={quote.status}/></td><td><div className="quote-actions"><button type="button" onClick={() => downloadQuotePdf(quote)}>PDF</button><button type="button" onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(`GeeBee quotation ${quote.id} for ${quote.customer}: ${money(quoteTotal(quote))}`)}`, "_blank")}>WhatsApp</button><button type="button" onClick={() => window.location.href = `mailto:?subject=${encodeURIComponent(`GeeBee quotation ${quote.id}`)}&body=${encodeURIComponent(`Quotation ${quote.id} for ${quote.customer}\nTotal: ${money(quoteTotal(quote))}`)}`}>Email</button>{quote.status !== "Converted" && <button className="convert-quote" type="button" onClick={() => window.confirm(`Create an order from ${quote.id}?`) && convert(quote)}>Convert to order</button>}<button className="edit-btn" type="button" onClick={() => edit(quote)}><Pencil size={14}/></button><button className="row-delete" type="button" onClick={() => window.confirm(`Remove ${quote.id}?`) && remove(quote.id)}><Trash2 size={14}/></button></div></td></tr>)}</tbody></table>{!quotes.length && <div className="empty">No quotations yet. Create one from a qualified enquiry.</div>}</div></section>;
 }
+function AutomationPanel() {
+  const templates = [
+    ["Order confirmation", "Order #{orderId} confirmed. We will keep you updated."],
+    ["Payment reminder", "Invoice #{invoiceId} has an outstanding amount of ₹{amount}."],
+    ["Dispatch update", "Your GeeBee order #{orderId} has been dispatched."],
+    ["Delivery update", "Your GeeBee order #{orderId} has been delivered."],
+    ["Quotation", "Your GeeBee quotation #{quoteId} is ready. Valid until {validity}."],
+  ];
+  return <section className="panel automation-panel"><div className="panel-head"><div><span className="overline">CUSTOMER COMMUNICATION</span><h2>WhatsApp & notification templates</h2><p>Order and invoice rows now have a prepared WhatsApp action. These templates are the messages that will be automated when the WhatsApp Business connection is added.</p></div></div><div className="automation-grid">{templates.map(([name, message]) => <article key={name}><div className="automation-icon">WA</div><div><b>{name}</b><p>{message}</p><small>Ready for WhatsApp automation</small></div></article>)}</div><div className="automation-next"><b>Next connection: WhatsApp → CRM</b><p>With a WhatsApp Business API connection, an incoming customer message can create a new enquiry automatically, and these messages can be sent without opening WhatsApp Web.</p></div></section>;
+}
 function LeadsPanel({ leads, edit, updateStage, remove }: { leads: Lead[]; edit: (lead: Lead) => void; updateStage: (id: string, status: LeadStage) => void; remove: (id: string) => void }) {
   return <section className="panel record-panel leads-panel"><div className="panel-head"><div><span className="overline">LEAD → ENQUIRY → QUOTE → ORDER</span><h2>Sales pipeline</h2><p>Qualify enquiries before creating customer orders.</p></div><div className="lead-stage-summary">{leadStages.slice(0, 7).map((stage) => <span key={stage}><b>{leads.filter((lead) => lead.status === stage).length}</b>{stage}</span>)}</div></div><div className="table-wrap"><table className="records"><thead><tr><th>LEAD</th><th>COMPANY / CONTACT</th><th>SOURCE</th><th>REQUIREMENT</th><th>EXPECTED VALUE</th><th>OWNER</th><th>EXPECTED DATE</th><th>STAGE</th><th/></tr></thead><tbody>{leads.map((lead) => <tr key={lead.id}><td><b>{lead.id}</b></td><td><div><b>{lead.company}</b><small className="table-subtext">{lead.contact} · {lead.mobile} · {lead.city}</small></div></td><td>{lead.source}</td><td className="lead-requirement">{lead.requirement}</td><td><b>{lead.expectedValue || "—"}</b></td><td>{lead.salesperson || "—"}</td><td>{lead.expectedDate ? new Date(lead.expectedDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}</td><td><select className="lead-stage-select" value={lead.status} onChange={(event) => updateStage(lead.id, event.target.value as LeadStage)}>{leadStages.map((stage) => <option key={stage}>{stage}</option>)}</select>{lead.status === "Lost" && <small className="table-subtext">{lead.lostReason || "Reason needed"}</small>}</td><td><div className="record-actions"><button className="edit-btn" type="button" onClick={() => edit(lead)} aria-label={`Edit ${lead.id}`}><Pencil size={14}/></button><button className="row-delete" type="button" onClick={() => window.confirm(`Remove ${lead.id}?`) && remove(lead.id)} aria-label={`Remove ${lead.id}`}><Trash2 size={14}/></button></div></td></tr>)}</tbody></table>{!leads.length && <div className="empty">No leads in this view. Create a lead to start the sales pipeline.</div>}</div></section>;
 }
@@ -1069,10 +1087,12 @@ function TeamAccess({ members, workspaceOwnerId, canManage, onChange, onAudit, a
 }
 function Invoices({
   invoices,
+  clients,
   edit,
   remove,
 }: {
   invoices: Invoice[];
+  clients: Client[];
   edit: (i: Invoice) => void;
   remove: (ids: string[]) => void;
 }) {
@@ -1119,7 +1139,7 @@ function Invoices({
                   <Pill value={i.status} />
                 </td>
                 <td>
-                  <div className="record-actions"><button className="edit-btn" onClick={() => edit(i)} aria-label={`Edit ${i.id}`}><Pencil size={14} /></button><button className="row-delete" type="button" onClick={() => removeOne(i)} aria-label={`Remove ${i.id}`}><Trash2 size={14}/></button></div>
+                  <div className="record-actions"><button className="whatsapp-action" type="button" onClick={() => { const client = clients.find((item) => item.name === i.client); openWhatsApp(client?.whatsapp || client?.phone || "", `Dear ${i.client}, Invoice #${i.id} has an outstanding amount of ${i.amount}. Due date: ${i.due}. Please contact GeeBee for any assistance.`); }} aria-label={`Send payment reminder for ${i.id}`}>WA</button><button className="edit-btn" onClick={() => edit(i)} aria-label={`Edit ${i.id}`}><Pencil size={14} /></button><button className="row-delete" type="button" onClick={() => removeOne(i)} aria-label={`Remove ${i.id}`}><Trash2 size={14}/></button></div>
                 </td>
               </tr>
             ))}
