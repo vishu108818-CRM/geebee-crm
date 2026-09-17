@@ -6,6 +6,7 @@ import "./catalogue-v2.css";
 import "./catalogue-delete.css";
 import "./auth.css";
 import "./crm-layout.css";
+import "./customer-management.css";
 import { supabase } from "./lib/supabase";
 import type { Session } from "@supabase/supabase-js";
 import {
@@ -59,11 +60,24 @@ type Order = {
 };
 type Client = {
   id: number;
+  customerId?: string;
   name: string;
   city: string;
+  state?: string;
+  address?: string;
+  pincode?: string;
   contact: string;
   phone: string;
+  whatsapp?: string;
+  email?: string;
+  gstin?: string;
+  pan?: string;
+  businessType?: string;
+  customerCategory?: string;
   credit: string;
+  paymentTerms?: string;
+  assignedSalesperson?: string;
+  customerStatus?: string;
   avatar: string;
   specialRates?: ClientSpecialRate[];
 };
@@ -599,7 +613,7 @@ export default function Home() {
           }}
         />
       )}
-      {clientProfile && <ClientProfile client={clientProfile} orders={orders} invoices={invoices} catalogue={catalogue} close={() => setClientProfile(null)} edit={() => { setClientProfile(null); show("client", clientProfile); }} />}
+      {clientProfile && <ClientProfile client={clientProfile} orders={orders} invoices={invoices} catalogue={catalogue} auditEvents={auditEvents} close={() => setClientProfile(null)} edit={() => { setClientProfile(null); show("client", clientProfile); }} />}
       {modal === "invoice" && (
         <InvoiceModal
           invoice={editing}
@@ -928,6 +942,8 @@ function Clients({
               <th>LOCATION</th>
               <th>PRIMARY CONTACT</th>
               <th>PHONE</th>
+              <th>TYPE</th>
+              <th>STATUS</th>
               <th>PAYMENT THRESHOLD</th>
               <th>SPECIAL SKU RATES</th>
               <th />
@@ -946,6 +962,8 @@ function Clients({
                 <td>{c.city}</td>
                 <td>{c.contact}</td>
                 <td>{c.phone}</td>
+                <td>{c.customerCategory || c.businessType || <span className="muted-cell">Not set</span>}</td>
+                <td><Pill value={c.customerStatus || "Active"}/></td>
                 <td>
                   <b>{c.credit}</b>
                 </td>
@@ -961,21 +979,27 @@ function Clients({
     </section>
   );
 }
-function ClientProfile({ client, orders, invoices, catalogue, close, edit }: { client: Client; orders: Order[]; invoices: Invoice[]; catalogue: CatalogueItem[]; close: () => void; edit: () => void }) {
+function ClientProfile({ client, orders, invoices, catalogue, auditEvents, close, edit }: { client: Client; orders: Order[]; invoices: Invoice[]; catalogue: CatalogueItem[]; auditEvents: AuditEvent[]; close: () => void; edit: () => void }) {
   const clientOrders = orders.filter((order) => order.client === client.name);
   const clientInvoices = invoices.filter((invoice) => invoice.client === client.name);
   const amount = (value: string) => Number(value.replace(/[^0-9.]/g, "")) || 0;
   const billed = clientInvoices.reduce((total, invoice) => total + amount(invoice.amount), 0);
   const paid = clientInvoices.filter((invoice) => invoice.status === "Paid").reduce((total, invoice) => total + amount(invoice.amount), 0);
   const outstanding = clientInvoices.filter((invoice) => invoice.status !== "Paid").reduce((total, invoice) => total + amount(invoice.amount), 0);
+  const lastOrder = [...clientOrders].sort((a, b) => new Date(b.eta).getTime() - new Date(a.eta).getTime())[0];
+  const averageOrder = clientOrders.length ? clientOrders.reduce((total, order) => total + orderTotal(order), 0) / clientOrders.length : 0;
+  const timelineEvents = auditEvents.filter((event) => event.details.toLowerCase().includes(client.name.toLowerCase())).slice(0, 6);
   const rateName = (sku: string) => catalogue.find((item) => item.sku === sku)?.name || "Catalogue product";
   return <Shell close={close}>
     <div className="client-profile-head"><div className="profile-avatar-large">{client.avatar || initials(client.name)}</div><div><span className="overline">CLIENT ACCOUNT</span><h2>{client.name}</h2><p>{client.city} · {client.contact}</p></div><button className="edit-profile-btn" type="button" onClick={edit}><Pencil size={14}/> Edit client</button></div>
-    <div className="client-contact-grid"><div><span>Primary contact</span><b>{client.contact || "—"}</b></div><div><span>Phone</span><b>{client.phone || "—"}</b></div><div><span>Payment threshold</span><b>{client.credit || "—"}</b></div></div>
+    <div className="client-contact-grid"><div><span>Customer ID</span><b>{client.customerId || `GB-C${String(client.id).padStart(4, "0")}`}</b></div><div><span>Primary contact</span><b>{client.contact || "—"}</b></div><div><span>Mobile</span><b>{client.phone || "—"}</b></div><div><span>WhatsApp</span><b>{client.whatsapp || client.phone || "—"}</b></div><div><span>Email</span><b>{client.email || "—"}</b></div><div><span>Customer category</span><b>{client.customerCategory || "—"}</b></div></div>
+    <section className="profile-section"><div className="profile-section-head"><h3>Business information</h3><span>{client.customerStatus || "Active"}</span></div><div className="customer-details-grid"><div><span>Business type</span><b>{client.businessType || "—"}</b></div><div><span>GSTIN</span><b>{client.gstin || "—"}</b></div><div><span>PAN</span><b>{client.pan || "—"}</b></div><div><span>State</span><b>{client.state || "—"}</b></div><div><span>City</span><b>{client.city || "—"}</b></div><div><span>Pincode</span><b>{client.pincode || "—"}</b></div><div className="customer-address"><span>Address</span><b>{client.address || "—"}</b></div></div></section>
     <div className="client-stat-grid"><div><span>Total billing</span><b>{money(billed)}</b><small>{clientInvoices.length} invoice{clientInvoices.length === 1 ? "" : "s"}</small></div><div><span>Paid</span><b>{money(paid)}</b><small>{clientInvoices.filter((invoice) => invoice.status === "Paid").length} settled</small></div><div><span>Outstanding</span><b className={outstanding ? "attention" : ""}>{money(outstanding)}</b><small>{clientInvoices.filter((invoice) => invoice.status !== "Paid").length} open invoice{clientInvoices.filter((invoice) => invoice.status !== "Paid").length === 1 ? "" : "s"}</small></div><div><span>Total order value</span><b>{money(clientOrders.reduce((total, order) => total + orderTotal(order), 0))}</b><small>{clientOrders.length} order{clientOrders.length === 1 ? "" : "s"}</small></div></div>
+    <section className="profile-section"><div className="profile-section-head"><h3>Commercial information</h3><span>{client.assignedSalesperson || "No salesperson assigned"}</span></div><div className="customer-details-grid"><div><span>Credit limit</span><b>{client.credit || "—"}</b></div><div><span>Payment terms</span><b>{client.paymentTerms || "—"}</b></div><div><span>Average order value</span><b>{money(averageOrder)}</b></div><div><span>Last order date</span><b>{lastOrder ? new Date(lastOrder.eta).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}</b></div><div><span>Assigned salesperson</span><b>{client.assignedSalesperson || "—"}</b></div><div><span>Customer status</span><b>{client.customerStatus || "Active"}</b></div></div></section>
     <section className="profile-section"><div className="profile-section-head"><h3>Special SKU rates</h3><span>{client.specialRates?.length || 0} negotiated</span></div>{client.specialRates?.length ? <div className="profile-rates">{client.specialRates.map((rate) => <article key={rate.sku}><div><b>{rate.sku}</b><span>{rateName(rate.sku)}</span></div><strong>{money(rate.rate)}</strong></article>)}</div> : <p className="profile-empty">No special rates set. Standard catalogue pricing applies.</p>}</section>
     <section className="profile-section"><div className="profile-section-head"><h3>Invoices & payment status</h3><span>{clientInvoices.length} records</span></div>{clientInvoices.length ? <div className="profile-list">{clientInvoices.map((invoice) => <article key={invoice.id}><div><b>{invoice.id}</b><span>Order {invoice.order} · Due {invoice.due}</span></div><strong>{invoice.amount}</strong><Pill value={invoice.status}/></article>)}</div> : <p className="profile-empty">No invoices have been recorded for this client.</p>}</section>
     <section className="profile-section"><div className="profile-section-head"><h3>Related orders</h3><span>{clientOrders.length} records</span></div>{clientOrders.length ? <div className="profile-list">{clientOrders.map((order) => <article key={order.id}><div><b>{order.id}</b><span>{order.product}{order.products && order.products.length > 1 ? ` +${order.products.length - 1} products` : ""} · ETA {order.eta}</span></div><strong>{money(orderTotal(order))}</strong><Pill value={order.payment}/></article>)}</div> : <p className="profile-empty">No orders have been recorded for this client.</p>}</section>
+    <section className="profile-section"><div className="profile-section-head"><h3>Customer timeline</h3><span>Latest activity</span></div><div className="customer-timeline">{timelineEvents.map((event) => <article key={event.id}><span className="timeline-dot"/><div><b>{event.action}</b><p>{event.actor_email} · {event.module}</p></div><time>{new Date(event.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</time></article>)}{clientInvoices.slice(0, 3).map((invoice) => <article key={`invoice-${invoice.id}`}><span className="timeline-dot invoice"/><div><b>Invoice {invoice.id} is {invoice.status.toLowerCase()}</b><p>{invoice.amount} · Due {invoice.due}</p></div></article>)}{clientOrders.slice(0, 3).map((order) => <article key={`order-${order.id}`}><span className="timeline-dot order"/><div><b>Order {order.id}</b><p>{order.product} · {money(orderTotal(order))}</p></div></article>)}{!timelineEvents.length && !clientInvoices.length && !clientOrders.length && <p className="profile-empty">Activity will appear here as this customer is engaged.</p>}</div></section>
   </Shell>;
 }
 function TeamAccess({ members, workspaceOwnerId, canManage, onChange, onAudit, auditEvents }: { members: WorkspaceMember[]; workspaceOwnerId: string | null; canManage: boolean; onChange: (members: WorkspaceMember[]) => void; onAudit: (action: string, module: string, details: string) => void; auditEvents: AuditEvent[] }) {
@@ -1347,11 +1371,24 @@ function ClientModal({
 }) {
   const initial = client || {
     id: Date.now(),
+    customerId: "",
     name: "",
     city: "",
+    state: "",
+    address: "",
+    pincode: "",
     contact: "",
     phone: "",
+    whatsapp: "",
+    email: "",
+    gstin: "",
+    pan: "",
+    businessType: "",
+    customerCategory: "",
     credit: "",
+    paymentTerms: "",
+    assignedSalesperson: "",
+    customerStatus: "Active",
     avatar: "",
     specialRates: [],
   };
@@ -1365,15 +1402,15 @@ function ClientModal({
         <Users size={22} />
       </div>
       <h2>{client ? "Edit client" : "New client"}</h2>
-      <p>Set the client contact details and payment threshold.</p>
-      <label>
-        Business name
+      <p>Create a complete customer account for sales, billing and follow-ups.</p>
+      <div className="modal-section-title">Business information</div>
+      <div className="form-row"><label>Customer ID<input value={f.customerId || ""} onChange={(e) => set("customerId", e.target.value.toUpperCase())} placeholder="GB-C0001"/></label><label>Business name
         <input
           value={f.name}
           onChange={(e) => set("name", e.target.value)}
           required
         />
-      </label>
+      </label></div>
       <div className="form-row">
         <label>
           City
@@ -1409,6 +1446,14 @@ function ClientModal({
           required
         />
       </label>
+      <div className="form-row"><label>WhatsApp<input value={f.whatsapp || ""} onChange={(e) => set("whatsapp", e.target.value)} placeholder="+91 98765 43210"/></label><label>Email<input type="email" value={f.email || ""} onChange={(e) => set("email", e.target.value)} placeholder="buyer@business.com"/></label></div>
+      <div className="form-row"><label>GSTIN<input value={f.gstin || ""} onChange={(e) => set("gstin", e.target.value.toUpperCase())} placeholder="22AAAAA0000A1Z5"/></label><label>PAN<input value={f.pan || ""} onChange={(e) => set("pan", e.target.value.toUpperCase())} placeholder="AAAAA0000A"/></label></div>
+      <div className="form-row"><label>Business type<select value={f.businessType || ""} onChange={(e) => set("businessType", e.target.value)}><option value="">Select type</option>{["Wholesaler", "Retailer", "Event Supplier", "Party Shop", "Distributor", "Online Seller", "Corporate", "Other"].map((value) => <option key={value}>{value}</option>)}</select></label><label>Customer category<select value={f.customerCategory || ""} onChange={(e) => set("customerCategory", e.target.value)}><option value="">Select category</option>{["A — Strategic", "B — Growth", "C — Standard", "New", "Other"].map((value) => <option key={value}>{value}</option>)}</select></label></div>
+      <div className="form-row"><label>State<input value={f.state || ""} onChange={(e) => set("state", e.target.value)} placeholder="Maharashtra"/></label><label>Pincode<input value={f.pincode || ""} onChange={(e) => set("pincode", e.target.value)} placeholder="400001"/></label></div>
+      <label>Address<textarea value={f.address || ""} onChange={(e) => set("address", e.target.value)} placeholder="Full billing / delivery address"/></label>
+      <div className="modal-section-title">Commercial information</div>
+      <div className="form-row"><label>Payment terms<select value={f.paymentTerms || ""} onChange={(e) => set("paymentTerms", e.target.value)}><option value="">Select payment terms</option>{["Advance", "7 days", "15 days", "30 days", "45 days", "60 days"].map((value) => <option key={value}>{value}</option>)}</select></label><label>Assigned salesperson<input value={f.assignedSalesperson || ""} onChange={(e) => set("assignedSalesperson", e.target.value)} placeholder="Employee name"/></label></div>
+      <label>Customer status<select value={f.customerStatus || "Active"} onChange={(e) => set("customerStatus", e.target.value)}>{["Active", "On hold", "Inactive", "Prospect", "Blocked"].map((value) => <option key={value}>{value}</option>)}</select></label>
       <div className="modal-section-title">Special SKU rates</div>
       <p className="special-rate-help">Set a negotiated unit price for this client. It will be applied automatically when that SKU is used in an order.</p>
       <div className="special-rate-list">{(f.specialRates || []).map((item) => <div className="special-rate-row" key={item.sku}><b>{item.sku}</b><input aria-label={`Special rate for ${item.sku}`} type="number" min="0" value={item.rate} onChange={(event) => setRate(item.sku, Number(event.target.value))}/><button type="button" onClick={() => removeRate(item.sku)}>Remove</button></div>)}</div>
@@ -1416,7 +1461,7 @@ function ClientModal({
       <button
         className="primary modal-submit"
         type="button"
-        onClick={() => save({ ...f, avatar: f.avatar || initials(f.name) })}
+        onClick={() => save({ ...f, customerId: f.customerId || `GB-C${String(f.id).slice(-4)}`, avatar: f.avatar || initials(f.name) })}
       >
         Save client
       </button>
