@@ -5,25 +5,35 @@ import "./catalogue.css";
 import "./catalogue-v2.css";
 import "./catalogue-delete.css";
 import "./auth.css";
+import "./crm-layout.css";
 import { supabase } from "./lib/supabase";
 import type { Session } from "@supabase/supabase-js";
 import {
   Bell,
+  Bot,
+  BriefcaseBusiness,
+  Building2,
+  ChartNoAxesCombined,
   Boxes,
   ChevronDown,
   CircleDollarSign,
+  ClipboardList,
   FileText,
   ImagePlus,
   LayoutDashboard,
   PackageCheck,
   Pencil,
   Plus,
+  ReceiptText,
   Search,
   ScanText,
   Settings,
   ShipWheel,
+  Target,
+  Truck,
   Trash2,
   Users,
+  Warehouse,
   X,
 } from "lucide-react";
 type ProductLine = { product: string; sku: string; quantity: number; unitPrice: number };
@@ -202,13 +212,24 @@ const initials = (n: string) =>
     .toUpperCase();
 const readDocumentText = async (file: File) => {
   if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
-    if (file.size > 4 * 1024 * 1024) throw new Error("This PDF is over the online upload limit. Please compress it below 4 MB, or split it into smaller catalogue pages.");
-    const form = new FormData();
-    form.append("file", file);
-    const response = await fetch("/api/pdf-text", { method: "POST", body: form });
+    if (file.size > 25 * 1024 * 1024) throw new Error("This PDF is over the 25 MB catalogue limit. Please split it into smaller files.");
+    let response: Response;
+    if (file.size > 3 * 1024 * 1024) {
+      if (!supabase) throw new Error("Cloud upload is not configured yet.");
+      const path = `pdf-imports/${crypto.randomUUID()}-${file.name.replace(/[^a-z0-9._-]/gi, "-")}`;
+      const { error: uploadError } = await supabase.storage.from("catalogue-imports").upload(path, file, { contentType: "application/pdf", upsert: false });
+      if (uploadError) throw new Error("Large PDF upload is not ready yet. Please run the latest Supabase setup script, then try again.");
+      const { data, error: linkError } = await supabase.storage.from("catalogue-imports").createSignedUrl(path, 600);
+      if (linkError || !data?.signedUrl) throw new Error("A secure link for this PDF could not be created.");
+      response = await fetch("/api/pdf-text", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourceUrl: data.signedUrl }) });
+    } else {
+      const form = new FormData();
+      form.append("file", file);
+      response = await fetch("/api/pdf-text", { method: "POST", body: form });
+    }
     const raw = await response.text();
     let result: { text?: string; error?: string } = {};
-    try { result = JSON.parse(raw); } catch { throw new Error(response.status === 413 ? "This PDF is over the online upload limit. Please compress it below 4 MB, or split it into smaller catalogue pages." : "The PDF service returned an unexpected response. Please try again."); }
+    try { result = JSON.parse(raw); } catch { throw new Error(response.status === 413 ? "This PDF is over the online upload limit. Please use the large-file import after running the Supabase setup script." : "The PDF service returned an unexpected response. Please try again."); }
     if (!response.ok) throw new Error(result.error || "The PDF could not be read.");
     return result.text as string;
   }
@@ -283,6 +304,8 @@ export default function Home() {
     [members, setMembers] = useState<WorkspaceMember[]>([]),
     [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]),
     [clientProfile, setClientProfile] = useState<Client | null>(null),
+    [notificationsOpen, setNotificationsOpen] = useState(false),
+    [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({ Customers: true, "Leads & Enquiries": true, Sales: true, Products: true, Inventory: true, Operations: true, Billing: true, Imports: true, Reports: true, Automation: true, Settings: true }),
     [modal, setModal] = useState<"order" | "client" | "invoice" | "catalogue" | null>(null),
     [editing, setEditing] = useState<any>(null),
     [toast, setToast] = useState("");
@@ -378,20 +401,24 @@ export default function Home() {
       ),
     [orders, search],
   );
-  const nav = [
-    [LayoutDashboard, "Overview"],
-    [Users, "Clients", String(clients.length)],
-    [Boxes, "Orders", String(orders.length)],
-    [PackageCheck, "Catalogue", String(catalogue.length)],
-    [
-      FileText,
-      "Invoices",
-      String(invoices.filter((i) => i.status !== "Paid").length),
-    ],
-    [CircleDollarSign, "Payments", "2"],
-    [ShipWheel, "Shipments"],
-  ] as const;
-  const visibleNav = nav.filter(([, label]) => label === "Overview" || allowedModules.includes(label as CrmModule));
+  const navigationGroups = [
+    { label: "Dashboard", icon: LayoutDashboard, items: [{ label: "Dashboard", section: "Overview", module: "Overview" as CrmModule }] },
+    { label: "Customers", icon: Users, items: [{ label: "All Customers", section: "Clients", module: "Clients" as CrmModule, count: String(clients.length) }, { label: "New Customers", section: "New Customers", module: "Clients" as CrmModule }, { label: "Customer Groups", section: "Customer Groups", module: "Clients" as CrmModule }, { label: "Customer Activity", section: "Customer Activity", module: "Clients" as CrmModule }] },
+    { label: "Leads & Enquiries", icon: Target, items: [{ label: "Leads", section: "Leads" }, { label: "Enquiries", section: "Enquiries" }, { label: "Follow-ups", section: "Follow-ups" }, { label: "Lost Leads", section: "Lost Leads" }] },
+    { label: "Sales", icon: BriefcaseBusiness, items: [{ label: "Quotations", section: "Quotations" }, { label: "Orders", section: "Orders", module: "Orders" as CrmModule, count: String(orders.length) }, { label: "Backorders", section: "Backorders", module: "Orders" as CrmModule }, { label: "Returns", section: "Returns", module: "Orders" as CrmModule }] },
+    { label: "Products", icon: Boxes, items: [{ label: "Products / SKUs", section: "Catalogue", module: "Catalogue" as CrmModule, count: String(catalogue.length) }, { label: "Categories", section: "Categories", module: "Catalogue" as CrmModule }, { label: "Price Lists", section: "Price Lists", module: "Catalogue" as CrmModule }, { label: "Stock", section: "Stock", module: "Catalogue" as CrmModule }] },
+    { label: "Inventory", icon: Warehouse, items: [{ label: "Stock Overview", section: "Stock Overview" }, { label: "Stock Movements", section: "Stock Movements" }, { label: "Low Stock", section: "Low Stock" }, { label: "Reserved Stock", section: "Reserved Stock" }, { label: "Warehouses", section: "Warehouses" }] },
+    { label: "Operations", icon: Truck, items: [{ label: "Picking", section: "Picking" }, { label: "Packing", section: "Packing" }, { label: "Dispatch", section: "Dispatch" }, { label: "Delivery", section: "Delivery" }] },
+    { label: "Billing", icon: ReceiptText, items: [{ label: "Invoices", section: "Invoices", module: "Invoices" as CrmModule, count: String(invoices.filter((i) => i.status !== "Paid").length) }, { label: "Payments", section: "Payments", module: "Payments" as CrmModule, count: "2" }, { label: "Outstanding", section: "Outstanding", module: "Payments" as CrmModule }, { label: "Ageing", section: "Ageing", module: "Payments" as CrmModule }] },
+    { label: "Imports", icon: ShipWheel, items: [{ label: "Suppliers", section: "Suppliers" }, { label: "Purchase Orders", section: "Purchase Orders" }, { label: "Shipments", section: "Shipments", module: "Shipments" as CrmModule }, { label: "Containers", section: "Containers", module: "Shipments" as CrmModule }, { label: "Landed Cost", section: "Landed Cost", module: "Shipments" as CrmModule }] },
+    { label: "Reports", icon: ChartNoAxesCombined, items: [{ label: "Sales", section: "Sales Report" }, { label: "Customers", section: "Customer Report" }, { label: "Products", section: "Product Report" }, { label: "Inventory", section: "Inventory Report" }, { label: "Payments", section: "Payment Report" }, { label: "Sales Team", section: "Sales Team Report" }] },
+    { label: "Automation", icon: Bot, items: [{ label: "Rules", section: "Rules" }, { label: "Notifications", section: "Notifications" }, { label: "Templates", section: "Templates" }] },
+    { label: "Settings", icon: Settings, items: [{ label: "Users", section: "Settings" }, { label: "Roles", section: "Settings" }, { label: "GST", section: "GST" }, { label: "Warehouses", section: "Warehouses" }, { label: "WhatsApp", section: "WhatsApp" }, { label: "Integrations", section: "Integrations" }] },
+  ];
+  const notifications = [
+    ...auditEvents.slice(0, 4).map((event) => ({ title: event.action, detail: `${event.actor_email} · ${event.module}`, time: new Date(event.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }) })),
+    ...invoices.filter((invoice) => invoice.status !== "Paid").slice(0, 2).map((invoice) => ({ title: `${invoice.status} invoice ${invoice.id}`, detail: `${invoice.client} · ${invoice.amount} due ${invoice.due}`, time: "Needs attention" })),
+  ].slice(0, 6);
   if (!authReady) return <div className="auth-screen"><div className="auth-card"><b>Opening secure workspace…</b></div></div>;
   if (!supabase) return <div className="auth-screen"><div className="auth-card"><span className="overline">GEEBEE CRM</span><h1>Cloud connection needed</h1><p>Add the Supabase environment settings to open this private workspace.</p></div></div>;
   if (!session) return <SignInScreen notice={accessNotice} />;
@@ -411,23 +438,15 @@ export default function Home() {
           <ChevronDown size={15} />
         </div>
         <nav>
-          {visibleNav.map(([Icon, label, count]) => (
-            <button
-              key={label}
-              className={section === label ? "active" : ""}
-              onClick={() => setSection(label)}
-            >
-              <Icon size={18} />
-              <span>{label}</span>
-              {count && <em>{count}</em>}
-            </button>
-          ))}
+          {navigationGroups.map((group) => {
+            const permitted = group.items.filter((item) => !item.module || isAdmin || allowedModules.includes(item.module));
+            if (!permitted.length) return null;
+            const Icon = group.icon;
+            const active = permitted.some((item) => section === item.section);
+            return <div className={`nav-group ${active ? "has-active" : ""}`} key={group.label}><button className="nav-group-title" type="button" onClick={() => setExpandedGroups((current) => ({ ...current, [group.label]: !current[group.label] }))}><Icon size={16}/><span>{group.label}</span><ChevronDown size={14} className={expandedGroups[group.label] ? "open" : ""}/></button>{expandedGroups[group.label] && <div className="nav-children">{permitted.map((item) => <button key={`${group.label}-${item.label}`} className={section === item.section ? "active" : ""} type="button" onClick={() => setSection(item.section)}><span>{item.label}</span>{item.count && <em>{item.count}</em>}</button>)}</div>}</div>;
+          })}
         </nav>
         <div className="side-bottom">
-          <button onClick={() => setSection("Settings")}>
-            <Settings size={18} />
-            <span>Settings</span>
-          </button>
           <div className="profile">
             <div className="avatar">RM</div>
             <div>
@@ -449,10 +468,11 @@ export default function Home() {
               placeholder="Search clients, orders, invoices..."
             />
           </div>
-          <button className="icon-btn">
+          <button className="icon-btn" type="button" aria-label="Open notifications" onClick={() => setNotificationsOpen((current) => !current)}>
             <Bell size={19} />
-            <i />
+            {notifications.length > 0 && <i />}
           </button>
+          {notificationsOpen && <section className="notification-popover"><div className="notification-head"><div><b>Notifications</b><span>Latest workspace updates</span></div><button type="button" onClick={() => setNotificationsOpen(false)}>Close</button></div>{notifications.length ? notifications.map((notification, index) => <article className="notification-item" key={`${notification.title}-${index}`}><span className="notification-dot"/><div><b>{notification.title}</b><p>{notification.detail}</p><small>{notification.time}</small></div></article>) : <p className="notification-empty">You are all caught up.</p>}</section>}
           <div className="header-avatar">RM</div>
         </header>
         {cloudError && <div className="cloud-warning">{cloudError}</div>}
@@ -528,15 +548,14 @@ export default function Home() {
           />
         )}{" "}
         {section === "Settings" && <TeamAccess members={members} workspaceOwnerId={workspaceOwnerId} canManage={isAdmin} onChange={setMembers} onAudit={logActivity} auditEvents={auditEvents} />}{" "}
-        {["Payments", "Shipments"].includes(section) && (
+        {!(["Overview", "Orders", "Clients", "Invoices", "Catalogue", "Settings"].includes(section)) && (
           <section className="panel coming">
             <div className="modal-mark">
-              <Settings size={22} />
+              <ClipboardList size={22} />
             </div>
             <h2>{section} workspace</h2>
             <p>
-              This module is ready for the next build. Orders, clients and
-              invoices are editable now.
+              This workspace is laid out and ready for its dedicated business workflow. Orders, customers, products, invoices and team access are live now.
             </p>
           </section>
         )}
@@ -1277,12 +1296,20 @@ function CataloguePanel({ items, edit, addDrafts, remove }: { items: CatalogueIt
     try {
       const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
       if (isPdf) {
-        if (file.size > 4 * 1024 * 1024) throw new Error("This PDF is over the online upload limit. Please compress it below 4 MB, or split it into smaller catalogue pages.");
-        const form = new FormData(); form.append("file", file);
-        const response = await fetch("/api/pdf-text", { method: "POST", body: form });
+        if (file.size > 25 * 1024 * 1024) throw new Error("This PDF is over the 25 MB catalogue limit. Please split it into smaller files.");
+        let response: Response;
+        if (file.size > 3 * 1024 * 1024) {
+          if (!supabase) throw new Error("Cloud upload is not configured yet.");
+          const path = `pdf-imports/${crypto.randomUUID()}-${file.name.replace(/[^a-z0-9._-]/gi, "-")}`;
+          const { error: uploadError } = await supabase.storage.from("catalogue-imports").upload(path, file, { contentType: "application/pdf", upsert: false });
+          if (uploadError) throw new Error("Large PDF upload is not ready yet. Please run the latest Supabase setup script, then try again.");
+          const { data, error: linkError } = await supabase.storage.from("catalogue-imports").createSignedUrl(path, 600);
+          if (linkError || !data?.signedUrl) throw new Error("A secure link for this PDF could not be created.");
+          response = await fetch("/api/pdf-text", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sourceUrl: data.signedUrl }) });
+        } else { const form = new FormData(); form.append("file", file); response = await fetch("/api/pdf-text", { method: "POST", body: form }); }
         const raw = await response.text();
         let result: { products?: Omit<CatalogueItem, "id">[]; error?: string } = {};
-        try { result = JSON.parse(raw); } catch { throw new Error(response.status === 413 ? "This PDF is over the online upload limit. Please compress it below 4 MB, or split it into smaller catalogue pages." : "The PDF service returned an unexpected response. Please try again."); }
+        try { result = JSON.parse(raw); } catch { throw new Error(response.status === 413 ? "This PDF is over the online upload limit. Please run the Supabase setup script for large-file imports." : "The PDF service returned an unexpected response. Please try again."); }
         if (!response.ok) throw new Error(result.error || "The catalogue PDF could not be read.");
         if (!result.products?.length) throw new Error("No product records were found in this catalogue PDF.");
         addDrafts(result.products.map((product: Omit<CatalogueItem, "id">, index: number) => ({ ...product, id: Date.now() + index })));

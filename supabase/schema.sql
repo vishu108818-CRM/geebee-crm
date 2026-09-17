@@ -82,3 +82,16 @@ drop policy if exists "Workspace can read audit history" on public.crm_audit_eve
 create policy "Workspace can read audit history" on public.crm_audit_events for select to authenticated using (workspace_owner_id = auth.uid() or exists (select 1 from public.crm_workspace_members m where m.workspace_owner_id = crm_audit_events.workspace_owner_id and lower(m.email) = lower(coalesce(auth.jwt() ->> 'email', ''))));
 drop policy if exists "Workspace can write audit history" on public.crm_audit_events;
 create policy "Workspace can write audit history" on public.crm_audit_events for insert to authenticated with check (workspace_owner_id = auth.uid() or exists (select 1 from public.crm_workspace_members m where m.workspace_owner_id = crm_audit_events.workspace_owner_id and lower(m.email) = lower(coalesce(auth.jwt() ->> 'email', ''))));
+
+-- Large catalogue PDFs are uploaded directly to Supabase Storage first, avoiding
+-- the smaller request limit on the hosted application server.
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('catalogue-imports', 'catalogue-imports', false, 26214400)
+on conflict (id) do update set file_size_limit = 26214400;
+
+drop policy if exists "Authenticated users upload catalogue PDFs" on storage.objects;
+create policy "Authenticated users upload catalogue PDFs" on storage.objects
+for insert to authenticated with check (bucket_id = 'catalogue-imports');
+drop policy if exists "Authenticated users read catalogue PDFs" on storage.objects;
+create policy "Authenticated users read catalogue PDFs" on storage.objects
+for select to authenticated using (bucket_id = 'catalogue-imports');

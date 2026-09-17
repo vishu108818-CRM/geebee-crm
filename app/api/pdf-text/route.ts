@@ -10,15 +10,24 @@ type ParsedProduct = { sku: string; name: string; description: string; cartonQty
 
 export async function POST(request: Request) {
   try {
-    const form = await request.formData();
-    const file = form.get("file");
-    if (!(file instanceof File) || !file.name.toLowerCase().endsWith(".pdf")) {
-      return NextResponse.json({ error: "Upload a PDF file." }, { status: 400 });
+    let pdfBytes: Uint8Array;
+    if (request.headers.get("content-type")?.includes("application/json")) {
+      const { sourceUrl } = await request.json() as { sourceUrl?: string };
+      const url = sourceUrl ? new URL(sourceUrl) : null;
+      if (!url || !url.hostname.endsWith(".supabase.co")) return NextResponse.json({ error: "Use a secure GeeBee catalogue upload link." }, { status: 400 });
+      const source = await fetch(url);
+      if (!source.ok) return NextResponse.json({ error: "The uploaded PDF could not be downloaded." }, { status: 422 });
+      pdfBytes = new Uint8Array(await source.arrayBuffer());
+    } else {
+      const form = await request.formData();
+      const file = form.get("file");
+      if (!(file instanceof File) || !file.name.toLowerCase().endsWith(".pdf")) return NextResponse.json({ error: "Upload a PDF file." }, { status: 400 });
+      pdfBytes = new Uint8Array(await file.arrayBuffer());
     }
     const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
     Object.assign(globalThis, { DOMMatrix, ImageData, Path2D });
     pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(join(process.cwd(), "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs")).href;
-    const document = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+    const document = await pdfjs.getDocument({ data: pdfBytes }).promise;
     const pages = await Promise.all(Array.from({ length: document.numPages }, async (_, index) => {
       const page = await document.getPage(index + 1);
       const content = await page.getTextContent();
