@@ -8,6 +8,7 @@ import "./auth.css";
 import "./crm-layout.css";
 import "./customer-management.css";
 import "./leads.css";
+import "./quotes.css";
 import { supabase } from "./lib/supabase";
 import type { Session } from "@supabase/supabase-js";
 import {
@@ -39,6 +40,7 @@ import {
   X,
 } from "lucide-react";
 type ProductLine = { product: string; sku: string; quantity: number; unitPrice: number };
+type QuoteProduct = ProductLine & { discount: number };
 type CatalogueItem = { id: number; name: string; sku: string; unitPrice: number; category: string; image: string; description: string; cartonQty: string };
 type ClientSpecialRate = { sku: string; rate: number };
 const crmModules = ["Overview", "Clients", "Leads", "Orders", "Catalogue", "Invoices", "Payments", "Shipments"] as const;
@@ -92,6 +94,7 @@ type Invoice = {
 };
 type LeadStage = "New" | "Contacted" | "Requirement Received" | "Quotation Sent" | "Negotiation" | "Confirmed" | "Order Created" | "Lost";
 type Lead = { id: string; company: string; contact: string; mobile: string; city: string; source: string; salesperson: string; requirement: string; expectedValue: string; expectedDate: string; status: LeadStage; lostReason?: string; createdAt: string };
+type Quote = { id: string; customer: string; products: QuoteProduct[]; gst: number; freight: number; validity: string; paymentTerms: string; deliveryTerms: string; status: "Draft" | "Sent" | "Accepted" | "Converted"; createdAt: string };
 const seedOrders: Order[] = [
   {
     id: "GB-24091",
@@ -221,6 +224,9 @@ const seedLeads: Lead[] = [
   { id: "LEAD-1002", company: "Celebration Hub", contact: "Nitin Verma", mobile: "+91 98110 44921", city: "Jaipur", source: "WhatsApp", salesperson: "Rahul", requirement: "Bulk balloon accessories", expectedValue: "₹1,20,000", expectedDate: "2026-09-28", status: "Quotation Sent", createdAt: "2026-09-16" },
   { id: "LEAD-1003", company: "Urban Party Store", contact: "Sejal Shah", mobile: "+91 99876 55124", city: "Surat", source: "Referral", salesperson: "Rahul", requirement: "New store opening assortment", expectedValue: "₹2,40,000", expectedDate: "2026-10-12", status: "New", createdAt: "2026-09-17" },
 ];
+const seedQuotes: Quote[] = [
+  { id: "QT-1001", customer: "Celebration Corner", products: [{ product: "Party Goggles", sku: "AB-981", quantity: 500, unitPrice: 12, discount: 5 }], gst: 18, freight: 1200, validity: "2026-09-30", paymentTerms: "30 days", deliveryTerms: "Ex-warehouse, Mumbai", status: "Sent", createdAt: "2026-09-17" },
+];
 const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 const linesFor = (order: Order): ProductLine[] => order.products || [{ product: order.product, sku: order.sku, quantity: order.quantity, unitPrice: order.unitPrice }];
 const orderTotal = (order: Order) => linesFor(order).reduce((total, line) => total + line.quantity * line.unitPrice, 0);
@@ -260,9 +266,9 @@ const readDocumentText = async (file: File) => {
 };
 const storageKey = "geebee-crm-data-v1";
 const approvedWorkspaceEmails = ["vishu108818@gmail.com"];
-type SavedCrmData = { orders: Order[]; clients: Client[]; invoices: Invoice[]; catalogue: CatalogueItem[]; leads: Lead[] };
+type SavedCrmData = { orders: Order[]; clients: Client[]; invoices: Invoice[]; catalogue: CatalogueItem[]; leads: Lead[]; quotes: Quote[] };
 const loadCrmData = (): SavedCrmData => {
-  const fallback = { orders: seedOrders, clients: seedClients, invoices: seedInvoices, catalogue: seedCatalogue, leads: seedLeads };
+  const fallback = { orders: seedOrders, clients: seedClients, invoices: seedInvoices, catalogue: seedCatalogue, leads: seedLeads, quotes: seedQuotes };
   if (typeof window === "undefined") return fallback;
   try {
     const saved = window.localStorage.getItem(storageKey);
@@ -274,6 +280,7 @@ const loadCrmData = (): SavedCrmData => {
       invoices: Array.isArray(parsed.invoices) ? parsed.invoices : fallback.invoices,
       catalogue: Array.isArray(parsed.catalogue) ? parsed.catalogue : fallback.catalogue,
       leads: Array.isArray(parsed.leads) ? parsed.leads : fallback.leads,
+      quotes: Array.isArray(parsed.quotes) ? parsed.quotes : fallback.quotes,
     };
   } catch { return fallback; }
 };
@@ -316,6 +323,7 @@ export default function Home() {
     [invoices, setInvoices] = useState(seedInvoices),
     [catalogue, setCatalogue] = useState(seedCatalogue),
     [leads, setLeads] = useState(seedLeads),
+    [quotes, setQuotes] = useState(seedQuotes),
     [storageReady, setStorageReady] = useState(false),
     [session, setSession] = useState<Session | null>(null),
     [authReady, setAuthReady] = useState(false),
@@ -330,14 +338,14 @@ export default function Home() {
     [clientProfile, setClientProfile] = useState<Client | null>(null),
     [notificationsOpen, setNotificationsOpen] = useState(false),
     [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({ Customers: true, "Leads & Enquiries": true, Sales: true, Products: true, Inventory: true, Operations: true, Billing: true, Imports: true, Reports: true, Automation: true, Settings: true }),
-    [modal, setModal] = useState<"order" | "client" | "invoice" | "catalogue" | "lead" | null>(null),
+    [modal, setModal] = useState<"order" | "client" | "invoice" | "catalogue" | "lead" | "quote" | null>(null),
     [editing, setEditing] = useState<any>(null),
     [toast, setToast] = useState("");
   const flash = (m: string) => {
       setToast(m);
       setTimeout(() => setToast(""), 2600);
     },
-    show = (k: "order" | "client" | "invoice" | "catalogue" | "lead", d?: any) => {
+    show = (k: "order" | "client" | "invoice" | "catalogue" | "lead" | "quote", d?: any) => {
       setEditing(d || null);
       setModal(k);
     };
@@ -350,13 +358,13 @@ export default function Home() {
   };
   useEffect(() => {
     const saved = loadCrmData();
-    setOrders(saved.orders); setClients(saved.clients); setInvoices(saved.invoices); setCatalogue(saved.catalogue); setLeads(saved.leads);
+    setOrders(saved.orders); setClients(saved.clients); setInvoices(saved.invoices); setCatalogue(saved.catalogue); setLeads(saved.leads); setQuotes(saved.quotes);
     setStorageReady(true);
   }, []);
   useEffect(() => {
     if (!storageReady) return;
-    window.localStorage.setItem(storageKey, JSON.stringify({ orders, clients, invoices, catalogue, leads }));
-  }, [orders, clients, invoices, catalogue, leads, storageReady]);
+    window.localStorage.setItem(storageKey, JSON.stringify({ orders, clients, invoices, catalogue, leads, quotes }));
+  }, [orders, clients, invoices, catalogue, leads, quotes, storageReady]);
   useEffect(() => {
     if (!supabase) { setAuthReady(true); return; }
     supabase.auth.getSession().then(({ data }) => { setSession(data.session); setAuthReady(true); });
@@ -385,10 +393,10 @@ export default function Home() {
       const { data: row, error } = await cloud.from("crm_workspaces").select("data").eq("owner_id", workspaceOwnerId).maybeSingle();
       if (cancelled) return;
       if (error) { setCloudError("Cloud workspace is not ready yet. Please run the supplied Supabase setup script."); return; }
-      const current = { orders, clients, invoices, catalogue, leads };
+      const current = { orders, clients, invoices, catalogue, leads, quotes };
       if (row?.data) {
         const saved = row.data as Partial<SavedCrmData>;
-        setOrders(Array.isArray(saved.orders) ? saved.orders : current.orders); setClients(Array.isArray(saved.clients) ? saved.clients : current.clients); setInvoices(Array.isArray(saved.invoices) ? saved.invoices : current.invoices); setCatalogue(Array.isArray(saved.catalogue) ? saved.catalogue : current.catalogue); setLeads(Array.isArray(saved.leads) ? saved.leads : current.leads);
+        setOrders(Array.isArray(saved.orders) ? saved.orders : current.orders); setClients(Array.isArray(saved.clients) ? saved.clients : current.clients); setInvoices(Array.isArray(saved.invoices) ? saved.invoices : current.invoices); setCatalogue(Array.isArray(saved.catalogue) ? saved.catalogue : current.catalogue); setLeads(Array.isArray(saved.leads) ? saved.leads : current.leads); setQuotes(Array.isArray(saved.quotes) ? saved.quotes : current.quotes);
       } else {
         const { error: createError } = await cloud.from("crm_workspaces").upsert({ owner_id: workspaceOwnerId, data: current, updated_at: new Date().toISOString() });
         if (createError) { setCloudError("Cloud workspace is not ready yet. Please run the supplied Supabase setup script."); return; }
@@ -402,10 +410,10 @@ export default function Home() {
     const cloud = supabase;
     if (!cloud || !session || !cloudReady || !workspaceOwnerId) return;
     const saveTimer = window.setTimeout(() => {
-      cloud.from("crm_workspaces").update({ data: { orders, clients, invoices, catalogue, leads }, updated_at: new Date().toISOString() }).eq("owner_id", workspaceOwnerId).then(({ error }) => { if (error) setCloudError("A change could not be saved to the cloud. Your local copy is still safe."); });
+      cloud.from("crm_workspaces").update({ data: { orders, clients, invoices, catalogue, leads, quotes }, updated_at: new Date().toISOString() }).eq("owner_id", workspaceOwnerId).then(({ error }) => { if (error) setCloudError("A change could not be saved to the cloud. Your local copy is still safe."); });
     }, 650);
     return () => window.clearTimeout(saveTimer);
-  }, [orders, clients, invoices, catalogue, leads, session, cloudReady, workspaceOwnerId]);
+  }, [orders, clients, invoices, catalogue, leads, quotes, session, cloudReady, workspaceOwnerId]);
   useEffect(() => {
     const cloud = supabase;
     if (!cloud || !isAdmin || !workspaceOwnerId) return;
@@ -429,7 +437,7 @@ export default function Home() {
     { label: "Dashboard", icon: LayoutDashboard, items: [{ label: "Dashboard", section: "Overview", module: "Overview" as CrmModule }] },
     { label: "Customers", icon: Users, items: [{ label: "All Customers", section: "Clients", module: "Clients" as CrmModule, count: String(clients.length) }, { label: "New Customers", section: "New Customers", module: "Clients" as CrmModule }, { label: "Customer Groups", section: "Customer Groups", module: "Clients" as CrmModule }, { label: "Customer Activity", section: "Customer Activity", module: "Clients" as CrmModule }] },
     { label: "Leads & Enquiries", icon: Target, items: [{ label: "Leads", section: "Leads", module: "Leads" as CrmModule, count: String(leads.filter((lead) => lead.status !== "Lost" && lead.status !== "Order Created").length) }, { label: "Enquiries", section: "Enquiries", module: "Leads" as CrmModule }, { label: "Follow-ups", section: "Follow-ups", module: "Leads" as CrmModule }, { label: "Lost Leads", section: "Lost Leads", module: "Leads" as CrmModule }] },
-    { label: "Sales", icon: BriefcaseBusiness, items: [{ label: "Quotations", section: "Quotations" }, { label: "Orders", section: "Orders", module: "Orders" as CrmModule, count: String(orders.length) }, { label: "Backorders", section: "Backorders", module: "Orders" as CrmModule }, { label: "Returns", section: "Returns", module: "Orders" as CrmModule }] },
+    { label: "Sales", icon: BriefcaseBusiness, items: [{ label: "Quotations", section: "Quotations", module: "Orders" as CrmModule, count: String(quotes.filter((quote) => quote.status !== "Converted").length) }, { label: "Orders", section: "Orders", module: "Orders" as CrmModule, count: String(orders.length) }, { label: "Backorders", section: "Backorders", module: "Orders" as CrmModule }, { label: "Returns", section: "Returns", module: "Orders" as CrmModule }] },
     { label: "Products", icon: Boxes, items: [{ label: "Products / SKUs", section: "Catalogue", module: "Catalogue" as CrmModule, count: String(catalogue.length) }, { label: "Categories", section: "Categories", module: "Catalogue" as CrmModule }, { label: "Price Lists", section: "Price Lists", module: "Catalogue" as CrmModule }, { label: "Stock", section: "Stock", module: "Catalogue" as CrmModule }] },
     { label: "Inventory", icon: Warehouse, items: [{ label: "Stock Overview", section: "Stock Overview" }, { label: "Stock Movements", section: "Stock Movements" }, { label: "Low Stock", section: "Low Stock" }, { label: "Reserved Stock", section: "Reserved Stock" }, { label: "Warehouses", section: "Warehouses" }] },
     { label: "Operations", icon: Truck, items: [{ label: "Picking", section: "Picking" }, { label: "Packing", section: "Packing" }, { label: "Dispatch", section: "Dispatch" }, { label: "Delivery", section: "Delivery" }] },
@@ -467,7 +475,7 @@ export default function Home() {
             if (!permitted.length) return null;
             const Icon = group.icon;
             const active = permitted.some((item) => section === item.section);
-            return <div className={`nav-group ${active ? "has-active" : ""}`} key={group.label}><button className="nav-group-title" type="button" onClick={() => setExpandedGroups((current) => ({ ...current, [group.label]: !current[group.label] }))}><Icon size={16}/><span>{group.label}</span><ChevronDown size={14} className={expandedGroups[group.label] ? "open" : ""}/></button>{expandedGroups[group.label] && <div className="nav-children">{permitted.map((item) => <button key={`${group.label}-${item.label}`} className={section === item.section ? "active" : ""} type="button" onClick={() => setSection(item.section)}><span>{item.label}</span>{item.count && <em>{item.count}</em>}</button>)}</div>}</div>;
+            return <div className={`nav-group ${active ? "has-active" : ""}`} key={group.label}><button className="nav-group-title" type="button" onClick={() => setExpandedGroups((current) => ({ ...current, [group.label]: !current[group.label] }))}><Icon size={16}/><span>{group.label}</span><ChevronDown size={14} className={expandedGroups[group.label] ? "open" : ""}/></button>{expandedGroups[group.label] && <div className="nav-children">{permitted.map((item) => { const count = (item as { count?: string }).count; return <button key={`${group.label}-${item.label}`} className={section === item.section ? "active" : ""} type="button" onClick={() => setSection(item.section)}><span>{item.label}</span>{count && <em>{count}</em>}</button>; })}</div>}</div>;
           })}
         </nav>
         <div className="side-bottom">
@@ -529,6 +537,7 @@ export default function Home() {
             </button>
           )}
           {["Leads", "Enquiries", "Follow-ups", "Lost Leads"].includes(section) && <button className="primary" onClick={() => show("lead")}><Plus size={18}/> New lead</button>}
+          {section === "Quotations" && <button className="primary" onClick={() => show("quote")}><Plus size={18}/> New quotation</button>}
         </div>
         {section === "Overview" && (
           <Overview
@@ -554,6 +563,7 @@ export default function Home() {
           />
         )}{" "}
         {["Leads", "Enquiries", "Follow-ups", "Lost Leads"].includes(section) && <LeadsPanel leads={leads.filter((lead) => { if (section === "Enquiries") return ["Requirement Received", "Quotation Sent", "Negotiation", "Confirmed"].includes(lead.status); if (section === "Follow-ups") return ["New", "Contacted", "Requirement Received", "Quotation Sent", "Negotiation"].includes(lead.status); if (section === "Lost Leads") return lead.status === "Lost"; return true; }).filter((lead) => `${lead.id} ${lead.company} ${lead.contact} ${lead.city}`.toLowerCase().includes(search.toLowerCase()))} edit={(lead) => show("lead", lead)} updateStage={(id, status) => { setLeads((current) => current.map((lead) => lead.id === id ? { ...lead, status } : lead)); logActivity("Updated lead stage", "Leads", `${id} → ${status}`); flash(`Lead moved to ${status}`); }} remove={(id) => { setLeads((current) => current.filter((lead) => lead.id !== id)); logActivity("Removed lead", "Leads", id); flash("Lead removed"); }} />}{" "}
+        {section === "Quotations" && <QuotesPanel quotes={quotes.filter((quote) => `${quote.id} ${quote.customer}`.toLowerCase().includes(search.toLowerCase()))} edit={(quote) => show("quote", quote)} remove={(id) => { setQuotes((current) => current.filter((quote) => quote.id !== id)); logActivity("Removed quotation", "Quotations", id); flash("Quotation removed"); }} convert={(quote) => { const customer = clients.find((client) => client.name === quote.customer); const first = quote.products[0] || { product: "", sku: "", quantity: 0, unitPrice: 0, discount: 0 }; const products = quote.products.map(({ discount: _discount, ...product }) => product); const order: Order = { id: `GB-${String(Date.now()).slice(-5)}`, client: quote.customer, city: customer?.city || "", product: first.product, sku: first.sku, quantity: first.quantity, unitPrice: first.unitPrice * (1 - first.discount / 100), products, eta: "", status: "Confirmed", payment: "Partial", avatar: customer?.avatar || initials(quote.customer) }; setOrders((current) => [...current, order]); setQuotes((current) => current.map((item) => item.id === quote.id ? { ...item, status: "Converted" } : item)); logActivity("Converted quotation to order", "Quotations", `${quote.id} → ${order.id}`); flash(`Order ${order.id} created from ${quote.id}`); }} />}{" "}
         {section === "Invoices" && (
           <Invoices
             invoices={invoices.filter((i) =>
@@ -574,7 +584,7 @@ export default function Home() {
           />
         )}{" "}
         {section === "Settings" && <TeamAccess members={members} workspaceOwnerId={workspaceOwnerId} canManage={isAdmin} onChange={setMembers} onAudit={logActivity} auditEvents={auditEvents} />}{" "}
-        {!(["Overview", "Orders", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Invoices", "Catalogue", "Settings"].includes(section)) && (
+        {!(["Overview", "Orders", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Invoices", "Catalogue", "Settings"].includes(section)) && (
           <section className="panel coming">
             <div className="modal-mark">
               <ClipboardList size={22} />
@@ -659,6 +669,7 @@ export default function Home() {
         />
       )}
       {modal === "lead" && <LeadModal lead={editing} close={() => setModal(null)} save={(lead) => { setLeads((current) => editing ? current.map((item) => item.id === editing.id ? lead : item) : [...current, lead]); setModal(null); logActivity(editing ? "Updated lead" : "Created lead", "Leads", `${lead.id} · ${lead.company}`); flash(editing ? "Lead updated" : "New lead created"); }} />}
+      {modal === "quote" && <QuoteModal quote={editing} clients={clients} catalogue={catalogue} close={() => setModal(null)} save={(quote) => { setQuotes((current) => editing ? current.map((item) => item.id === editing.id ? quote : item) : [...current, quote]); setModal(null); logActivity(editing ? "Updated quotation" : "Created quotation", "Quotations", `${quote.id} · ${quote.customer}`); flash(editing ? "Quotation updated" : "Quotation created"); }} />}
       {toast && (
         <div className="toast">
           <PackageCheck size={18} />
@@ -995,6 +1006,18 @@ function Clients({
 const leadStages: LeadStage[] = ["New", "Contacted", "Requirement Received", "Quotation Sent", "Negotiation", "Confirmed", "Order Created", "Lost"];
 const leadSources = ["WhatsApp", "Phone", "IndiaMART", "TradeIndia", "JD Mart", "Instagram", "Website", "Referral", "Existing customer", "Exhibition", "Salesperson", "Other"];
 const lostReasons = ["Price", "Out of stock", "Competitor", "Customer cancelled", "No response", "Payment issue", "Other"];
+const quoteSubtotal = (quote: Quote) => quote.products.reduce((total, product) => total + product.quantity * product.unitPrice * (1 - product.discount / 100), 0);
+const quoteTotal = (quote: Quote) => { const subtotal = quoteSubtotal(quote); return subtotal + subtotal * (quote.gst / 100) + quote.freight; };
+const downloadQuotePdf = async (quote: Quote) => {
+  const { jsPDF } = await import("jspdf"); const pdf = new jsPDF(); let y = 20;
+  pdf.setFontSize(21); pdf.text("GeeBee Imports", 14, y); y += 10; pdf.setFontSize(14); pdf.text(`Quotation ${quote.id}`, 14, y); y += 9; pdf.setFontSize(10); pdf.text(`Customer: ${quote.customer}`, 14, y); y += 7; pdf.text(`Valid until: ${quote.validity || "Not specified"}`, 14, y); y += 11;
+  pdf.setFontSize(10); pdf.text("Product", 14, y); pdf.text("Qty", 105, y); pdf.text("Rate", 125, y); pdf.text("Discount", 148, y); pdf.text("Amount", 174, y); y += 5; pdf.line(14, y, 196, y); y += 7;
+  quote.products.forEach((product) => { const total = product.quantity * product.unitPrice * (1 - product.discount / 100); pdf.text(product.product.slice(0, 42), 14, y); pdf.text(String(product.quantity), 105, y); pdf.text(String(product.unitPrice), 125, y); pdf.text(`${product.discount}%`, 148, y); pdf.text(String(Math.round(total)), 174, y); y += 7; });
+  y += 4; pdf.line(112, y, 196, y); y += 7; pdf.text(`Subtotal: Rs. ${Math.round(quoteSubtotal(quote))}`, 125, y); y += 6; pdf.text(`GST (${quote.gst}%): Rs. ${Math.round(quoteSubtotal(quote) * quote.gst / 100)}`, 125, y); y += 6; pdf.text(`Freight: Rs. ${Math.round(quote.freight)}`, 125, y); y += 7; pdf.setFontSize(12); pdf.text(`Total: Rs. ${Math.round(quoteTotal(quote))}`, 125, y); y += 12; pdf.setFontSize(9); pdf.text(`Payment terms: ${quote.paymentTerms || "—"}`, 14, y); y += 6; pdf.text(`Delivery terms: ${quote.deliveryTerms || "—"}`, 14, y); pdf.save(`${quote.id}.pdf`);
+};
+function QuotesPanel({ quotes, edit, remove, convert }: { quotes: Quote[]; edit: (quote: Quote) => void; remove: (id: string) => void; convert: (quote: Quote) => void }) {
+  return <section className="panel record-panel quotes-panel"><div className="panel-head"><div><span className="overline">QUOTATION MANAGEMENT</span><h2>Customer quotations</h2><p>Build commercial offers, share them, then convert accepted quotes into orders.</p></div></div><div className="table-wrap"><table className="records"><thead><tr><th>QUOTE</th><th>CUSTOMER</th><th>PRODUCTS</th><th>TOTAL</th><th>VALIDITY</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>{quotes.map((quote) => <tr key={quote.id}><td><b>{quote.id}</b></td><td>{quote.customer}</td><td>{quote.products.length} line{quote.products.length === 1 ? "" : "s"}</td><td><b>{money(quoteTotal(quote))}</b></td><td>{quote.validity || "—"}</td><td><Pill value={quote.status}/></td><td><div className="quote-actions"><button type="button" onClick={() => downloadQuotePdf(quote)}>PDF</button><button type="button" onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(`GeeBee quotation ${quote.id} for ${quote.customer}: ${money(quoteTotal(quote))}`)}`, "_blank")}>WhatsApp</button><button type="button" onClick={() => window.location.href = `mailto:?subject=${encodeURIComponent(`GeeBee quotation ${quote.id}`)}&body=${encodeURIComponent(`Quotation ${quote.id} for ${quote.customer}\nTotal: ${money(quoteTotal(quote))}`)}`}>Email</button>{quote.status !== "Converted" && <button className="convert-quote" type="button" onClick={() => window.confirm(`Create an order from ${quote.id}?`) && convert(quote)}>Convert to order</button>}<button className="edit-btn" type="button" onClick={() => edit(quote)}><Pencil size={14}/></button><button className="row-delete" type="button" onClick={() => window.confirm(`Remove ${quote.id}?`) && remove(quote.id)}><Trash2 size={14}/></button></div></td></tr>)}</tbody></table>{!quotes.length && <div className="empty">No quotations yet. Create one from a qualified enquiry.</div>}</div></section>;
+}
 function LeadsPanel({ leads, edit, updateStage, remove }: { leads: Lead[]; edit: (lead: Lead) => void; updateStage: (id: string, status: LeadStage) => void; remove: (id: string) => void }) {
   return <section className="panel record-panel leads-panel"><div className="panel-head"><div><span className="overline">LEAD → ENQUIRY → QUOTE → ORDER</span><h2>Sales pipeline</h2><p>Qualify enquiries before creating customer orders.</p></div><div className="lead-stage-summary">{leadStages.slice(0, 7).map((stage) => <span key={stage}><b>{leads.filter((lead) => lead.status === stage).length}</b>{stage}</span>)}</div></div><div className="table-wrap"><table className="records"><thead><tr><th>LEAD</th><th>COMPANY / CONTACT</th><th>SOURCE</th><th>REQUIREMENT</th><th>EXPECTED VALUE</th><th>OWNER</th><th>EXPECTED DATE</th><th>STAGE</th><th/></tr></thead><tbody>{leads.map((lead) => <tr key={lead.id}><td><b>{lead.id}</b></td><td><div><b>{lead.company}</b><small className="table-subtext">{lead.contact} · {lead.mobile} · {lead.city}</small></div></td><td>{lead.source}</td><td className="lead-requirement">{lead.requirement}</td><td><b>{lead.expectedValue || "—"}</b></td><td>{lead.salesperson || "—"}</td><td>{lead.expectedDate ? new Date(lead.expectedDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}</td><td><select className="lead-stage-select" value={lead.status} onChange={(event) => updateStage(lead.id, event.target.value as LeadStage)}>{leadStages.map((stage) => <option key={stage}>{stage}</option>)}</select>{lead.status === "Lost" && <small className="table-subtext">{lead.lostReason || "Reason needed"}</small>}</td><td><div className="record-actions"><button className="edit-btn" type="button" onClick={() => edit(lead)} aria-label={`Edit ${lead.id}`}><Pencil size={14}/></button><button className="row-delete" type="button" onClick={() => window.confirm(`Remove ${lead.id}?`) && remove(lead.id)} aria-label={`Remove ${lead.id}`}><Trash2 size={14}/></button></div></td></tr>)}</tbody></table>{!leads.length && <div className="empty">No leads in this view. Create a lead to start the sales pipeline.</div>}</div></section>;
 }
@@ -1486,6 +1509,13 @@ function ClientModal({
       </button>
     </Shell>
   );
+}
+function QuoteModal({ quote, clients, catalogue, close, save }: { quote: Quote | null; clients: Client[]; catalogue: CatalogueItem[]; close: () => void; save: (quote: Quote) => void }) {
+  const initial: Quote = quote || { id: `QT-${String(Date.now()).slice(-6)}`, customer: "", products: [{ product: "", sku: "", quantity: 1, unitPrice: 0, discount: 0 }], gst: 18, freight: 0, validity: "", paymentTerms: "", deliveryTerms: "", status: "Draft", createdAt: new Date().toISOString().slice(0, 10) };
+  const [form, setForm] = useState<Quote>(initial);
+  const updateLine = (index: number, key: keyof QuoteProduct, value: string | number) => setForm((current) => ({ ...current, products: current.products.map((line, lineIndex) => { if (lineIndex !== index) return line; const next = { ...line, [key]: value }; if (key === "sku") { const product = catalogue.find((item) => item.sku === value); return { ...next, product: product?.name || next.product, unitPrice: product?.unitPrice ?? next.unitPrice }; } return next; }) }));
+  const subtotal = quoteSubtotal(form); const total = quoteTotal(form);
+  return <Shell close={close}><div className="modal-mark"><FileText size={22}/></div><h2>{quote ? "Edit quotation" : "New quotation"}</h2><p>Create a customer-ready quote, then share or convert it into an order.</p><div className="form-row"><label>Quote number<input value={form.id} onChange={(event) => setForm({ ...form, id: event.target.value.toUpperCase() })}/></label><label>Customer<select value={form.customer} onChange={(event) => setForm({ ...form, customer: event.target.value })}><option value="">Select customer</option>{clients.map((client) => <option key={client.id}>{client.name}</option>)}</select></label></div><div className="modal-section-title">Products & pricing</div><div className="quote-lines">{form.products.map((line, index) => <div className="quote-line" key={index}><select value={line.sku} onChange={(event) => updateLine(index, "sku", event.target.value)}><option value="">Select SKU</option>{catalogue.map((product) => <option key={product.id} value={product.sku}>{product.sku} — {product.name}</option>)}</select><input aria-label="Quantity" type="number" min="1" value={line.quantity} onChange={(event) => updateLine(index, "quantity", Number(event.target.value))}/><input aria-label="Rate" type="number" min="0" value={line.unitPrice} onChange={(event) => updateLine(index, "unitPrice", Number(event.target.value))}/><input aria-label="Discount percent" type="number" min="0" max="100" value={line.discount} onChange={(event) => updateLine(index, "discount", Number(event.target.value))}/><b>{money(line.quantity * line.unitPrice * (1 - line.discount / 100))}</b>{form.products.length > 1 && <button type="button" onClick={() => setForm({ ...form, products: form.products.filter((_, itemIndex) => itemIndex !== index) })}>×</button>}</div>)}</div><button type="button" className="add-line" onClick={() => setForm({ ...form, products: [...form.products, { product: "", sku: "", quantity: 1, unitPrice: 0, discount: 0 }] })}><Plus size={15}/> Add product</button><div className="quote-total-box"><span>Subtotal <b>{money(subtotal)}</b></span><span>GST<input type="number" min="0" value={form.gst} onChange={(event) => setForm({ ...form, gst: Number(event.target.value) })}/>%</span><span>Freight<input type="number" min="0" value={form.freight} onChange={(event) => setForm({ ...form, freight: Number(event.target.value) })}/></span><strong>Total {money(total)}</strong></div><div className="form-row"><label>Validity<input type="date" value={form.validity} onChange={(event) => setForm({ ...form, validity: event.target.value })}/></label><label>Status<select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as Quote["status"] })}>{["Draft", "Sent", "Accepted", "Converted"].map((status) => <option key={status}>{status}</option>)}</select></label></div><label>Payment terms<input value={form.paymentTerms} onChange={(event) => setForm({ ...form, paymentTerms: event.target.value })} placeholder="e.g. 30 days from invoice"/></label><label>Delivery terms<input value={form.deliveryTerms} onChange={(event) => setForm({ ...form, deliveryTerms: event.target.value })} placeholder="e.g. Ex-warehouse, Mumbai"/></label><button className="primary modal-submit" type="button" onClick={() => save(form)}>Save quotation</button></Shell>;
 }
 function LeadModal({ lead, close, save }: { lead: Lead | null; close: () => void; save: (lead: Lead) => void }) {
   const initial: Lead = lead || { id: `LEAD-${String(Date.now()).slice(-6)}`, company: "", contact: "", mobile: "", city: "", source: "WhatsApp", salesperson: "", requirement: "", expectedValue: "", expectedDate: "", status: "New", lostReason: "", createdAt: new Date().toISOString().slice(0, 10) };
