@@ -7,6 +7,7 @@ import "./catalogue-delete.css";
 import "./auth.css";
 import "./crm-layout.css";
 import "./customer-management.css";
+import "./leads.css";
 import { supabase } from "./lib/supabase";
 import type { Session } from "@supabase/supabase-js";
 import {
@@ -40,7 +41,7 @@ import {
 type ProductLine = { product: string; sku: string; quantity: number; unitPrice: number };
 type CatalogueItem = { id: number; name: string; sku: string; unitPrice: number; category: string; image: string; description: string; cartonQty: string };
 type ClientSpecialRate = { sku: string; rate: number };
-const crmModules = ["Overview", "Clients", "Orders", "Catalogue", "Invoices", "Payments", "Shipments"] as const;
+const crmModules = ["Overview", "Clients", "Leads", "Orders", "Catalogue", "Invoices", "Payments", "Shipments"] as const;
 type CrmModule = typeof crmModules[number];
 type WorkspaceMember = { id: number; workspace_owner_id: string; email: string; role: "admin" | "employee"; modules: CrmModule[] };
 type AuditEvent = { id: number; actor_email: string; action: string; module: string; details: string; created_at: string };
@@ -89,6 +90,8 @@ type Invoice = {
   due: string;
   status: string;
 };
+type LeadStage = "New" | "Contacted" | "Requirement Received" | "Quotation Sent" | "Negotiation" | "Confirmed" | "Order Created" | "Lost";
+type Lead = { id: string; company: string; contact: string; mobile: string; city: string; source: string; salesperson: string; requirement: string; expectedValue: string; expectedDate: string; status: LeadStage; lostReason?: string; createdAt: string };
 const seedOrders: Order[] = [
   {
     id: "GB-24091",
@@ -213,6 +216,11 @@ const seedCatalogue: CatalogueItem[] = [
   { id: 3, name: "Cake Crown", sku: "AB-821", unitPrice: 42, category: "Cake Accessories", image: "", description: "Cake Crown", cartonQty: "" },
   { id: 4, name: "LED Light 10cm", sku: "AB-871", unitPrice: 94, category: "Decorations", image: "", description: "LED Light 10cm", cartonQty: "" },
 ];
+const seedLeads: Lead[] = [
+  { id: "LEAD-1001", company: "Sunshine Events", contact: "Rhea Kapoor", mobile: "+91 98765 10203", city: "Delhi", source: "Instagram", salesperson: "Rahul", requirement: "Festival decorations and party props", expectedValue: "₹85,000", expectedDate: "2026-10-05", status: "Requirement Received", createdAt: "2026-09-17" },
+  { id: "LEAD-1002", company: "Celebration Hub", contact: "Nitin Verma", mobile: "+91 98110 44921", city: "Jaipur", source: "WhatsApp", salesperson: "Rahul", requirement: "Bulk balloon accessories", expectedValue: "₹1,20,000", expectedDate: "2026-09-28", status: "Quotation Sent", createdAt: "2026-09-16" },
+  { id: "LEAD-1003", company: "Urban Party Store", contact: "Sejal Shah", mobile: "+91 99876 55124", city: "Surat", source: "Referral", salesperson: "Rahul", requirement: "New store opening assortment", expectedValue: "₹2,40,000", expectedDate: "2026-10-12", status: "New", createdAt: "2026-09-17" },
+];
 const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 const linesFor = (order: Order): ProductLine[] => order.products || [{ product: order.product, sku: order.sku, quantity: order.quantity, unitPrice: order.unitPrice }];
 const orderTotal = (order: Order) => linesFor(order).reduce((total, line) => total + line.quantity * line.unitPrice, 0);
@@ -252,9 +260,9 @@ const readDocumentText = async (file: File) => {
 };
 const storageKey = "geebee-crm-data-v1";
 const approvedWorkspaceEmails = ["vishu108818@gmail.com"];
-type SavedCrmData = { orders: Order[]; clients: Client[]; invoices: Invoice[]; catalogue: CatalogueItem[] };
+type SavedCrmData = { orders: Order[]; clients: Client[]; invoices: Invoice[]; catalogue: CatalogueItem[]; leads: Lead[] };
 const loadCrmData = (): SavedCrmData => {
-  const fallback = { orders: seedOrders, clients: seedClients, invoices: seedInvoices, catalogue: seedCatalogue };
+  const fallback = { orders: seedOrders, clients: seedClients, invoices: seedInvoices, catalogue: seedCatalogue, leads: seedLeads };
   if (typeof window === "undefined") return fallback;
   try {
     const saved = window.localStorage.getItem(storageKey);
@@ -265,6 +273,7 @@ const loadCrmData = (): SavedCrmData => {
       clients: Array.isArray(parsed.clients) ? parsed.clients : fallback.clients,
       invoices: Array.isArray(parsed.invoices) ? parsed.invoices : fallback.invoices,
       catalogue: Array.isArray(parsed.catalogue) ? parsed.catalogue : fallback.catalogue,
+      leads: Array.isArray(parsed.leads) ? parsed.leads : fallback.leads,
     };
   } catch { return fallback; }
 };
@@ -306,6 +315,7 @@ export default function Home() {
     [clients, setClients] = useState(seedClients),
     [invoices, setInvoices] = useState(seedInvoices),
     [catalogue, setCatalogue] = useState(seedCatalogue),
+    [leads, setLeads] = useState(seedLeads),
     [storageReady, setStorageReady] = useState(false),
     [session, setSession] = useState<Session | null>(null),
     [authReady, setAuthReady] = useState(false),
@@ -320,14 +330,14 @@ export default function Home() {
     [clientProfile, setClientProfile] = useState<Client | null>(null),
     [notificationsOpen, setNotificationsOpen] = useState(false),
     [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({ Customers: true, "Leads & Enquiries": true, Sales: true, Products: true, Inventory: true, Operations: true, Billing: true, Imports: true, Reports: true, Automation: true, Settings: true }),
-    [modal, setModal] = useState<"order" | "client" | "invoice" | "catalogue" | null>(null),
+    [modal, setModal] = useState<"order" | "client" | "invoice" | "catalogue" | "lead" | null>(null),
     [editing, setEditing] = useState<any>(null),
     [toast, setToast] = useState("");
   const flash = (m: string) => {
       setToast(m);
       setTimeout(() => setToast(""), 2600);
     },
-    show = (k: "order" | "client" | "invoice" | "catalogue", d?: any) => {
+    show = (k: "order" | "client" | "invoice" | "catalogue" | "lead", d?: any) => {
       setEditing(d || null);
       setModal(k);
     };
@@ -340,13 +350,13 @@ export default function Home() {
   };
   useEffect(() => {
     const saved = loadCrmData();
-    setOrders(saved.orders); setClients(saved.clients); setInvoices(saved.invoices); setCatalogue(saved.catalogue);
+    setOrders(saved.orders); setClients(saved.clients); setInvoices(saved.invoices); setCatalogue(saved.catalogue); setLeads(saved.leads);
     setStorageReady(true);
   }, []);
   useEffect(() => {
     if (!storageReady) return;
-    window.localStorage.setItem(storageKey, JSON.stringify({ orders, clients, invoices, catalogue }));
-  }, [orders, clients, invoices, catalogue, storageReady]);
+    window.localStorage.setItem(storageKey, JSON.stringify({ orders, clients, invoices, catalogue, leads }));
+  }, [orders, clients, invoices, catalogue, leads, storageReady]);
   useEffect(() => {
     if (!supabase) { setAuthReady(true); return; }
     supabase.auth.getSession().then(({ data }) => { setSession(data.session); setAuthReady(true); });
@@ -375,10 +385,10 @@ export default function Home() {
       const { data: row, error } = await cloud.from("crm_workspaces").select("data").eq("owner_id", workspaceOwnerId).maybeSingle();
       if (cancelled) return;
       if (error) { setCloudError("Cloud workspace is not ready yet. Please run the supplied Supabase setup script."); return; }
-      const current = { orders, clients, invoices, catalogue };
+      const current = { orders, clients, invoices, catalogue, leads };
       if (row?.data) {
         const saved = row.data as Partial<SavedCrmData>;
-        setOrders(Array.isArray(saved.orders) ? saved.orders : current.orders); setClients(Array.isArray(saved.clients) ? saved.clients : current.clients); setInvoices(Array.isArray(saved.invoices) ? saved.invoices : current.invoices); setCatalogue(Array.isArray(saved.catalogue) ? saved.catalogue : current.catalogue);
+        setOrders(Array.isArray(saved.orders) ? saved.orders : current.orders); setClients(Array.isArray(saved.clients) ? saved.clients : current.clients); setInvoices(Array.isArray(saved.invoices) ? saved.invoices : current.invoices); setCatalogue(Array.isArray(saved.catalogue) ? saved.catalogue : current.catalogue); setLeads(Array.isArray(saved.leads) ? saved.leads : current.leads);
       } else {
         const { error: createError } = await cloud.from("crm_workspaces").upsert({ owner_id: workspaceOwnerId, data: current, updated_at: new Date().toISOString() });
         if (createError) { setCloudError("Cloud workspace is not ready yet. Please run the supplied Supabase setup script."); return; }
@@ -392,10 +402,10 @@ export default function Home() {
     const cloud = supabase;
     if (!cloud || !session || !cloudReady || !workspaceOwnerId) return;
     const saveTimer = window.setTimeout(() => {
-      cloud.from("crm_workspaces").update({ data: { orders, clients, invoices, catalogue }, updated_at: new Date().toISOString() }).eq("owner_id", workspaceOwnerId).then(({ error }) => { if (error) setCloudError("A change could not be saved to the cloud. Your local copy is still safe."); });
+      cloud.from("crm_workspaces").update({ data: { orders, clients, invoices, catalogue, leads }, updated_at: new Date().toISOString() }).eq("owner_id", workspaceOwnerId).then(({ error }) => { if (error) setCloudError("A change could not be saved to the cloud. Your local copy is still safe."); });
     }, 650);
     return () => window.clearTimeout(saveTimer);
-  }, [orders, clients, invoices, catalogue, session, cloudReady, workspaceOwnerId]);
+  }, [orders, clients, invoices, catalogue, leads, session, cloudReady, workspaceOwnerId]);
   useEffect(() => {
     const cloud = supabase;
     if (!cloud || !isAdmin || !workspaceOwnerId) return;
@@ -418,7 +428,7 @@ export default function Home() {
   const navigationGroups = [
     { label: "Dashboard", icon: LayoutDashboard, items: [{ label: "Dashboard", section: "Overview", module: "Overview" as CrmModule }] },
     { label: "Customers", icon: Users, items: [{ label: "All Customers", section: "Clients", module: "Clients" as CrmModule, count: String(clients.length) }, { label: "New Customers", section: "New Customers", module: "Clients" as CrmModule }, { label: "Customer Groups", section: "Customer Groups", module: "Clients" as CrmModule }, { label: "Customer Activity", section: "Customer Activity", module: "Clients" as CrmModule }] },
-    { label: "Leads & Enquiries", icon: Target, items: [{ label: "Leads", section: "Leads" }, { label: "Enquiries", section: "Enquiries" }, { label: "Follow-ups", section: "Follow-ups" }, { label: "Lost Leads", section: "Lost Leads" }] },
+    { label: "Leads & Enquiries", icon: Target, items: [{ label: "Leads", section: "Leads", module: "Leads" as CrmModule, count: String(leads.filter((lead) => lead.status !== "Lost" && lead.status !== "Order Created").length) }, { label: "Enquiries", section: "Enquiries", module: "Leads" as CrmModule }, { label: "Follow-ups", section: "Follow-ups", module: "Leads" as CrmModule }, { label: "Lost Leads", section: "Lost Leads", module: "Leads" as CrmModule }] },
     { label: "Sales", icon: BriefcaseBusiness, items: [{ label: "Quotations", section: "Quotations" }, { label: "Orders", section: "Orders", module: "Orders" as CrmModule, count: String(orders.length) }, { label: "Backorders", section: "Backorders", module: "Orders" as CrmModule }, { label: "Returns", section: "Returns", module: "Orders" as CrmModule }] },
     { label: "Products", icon: Boxes, items: [{ label: "Products / SKUs", section: "Catalogue", module: "Catalogue" as CrmModule, count: String(catalogue.length) }, { label: "Categories", section: "Categories", module: "Catalogue" as CrmModule }, { label: "Price Lists", section: "Price Lists", module: "Catalogue" as CrmModule }, { label: "Stock", section: "Stock", module: "Catalogue" as CrmModule }] },
     { label: "Inventory", icon: Warehouse, items: [{ label: "Stock Overview", section: "Stock Overview" }, { label: "Stock Movements", section: "Stock Movements" }, { label: "Low Stock", section: "Low Stock" }, { label: "Reserved Stock", section: "Reserved Stock" }, { label: "Warehouses", section: "Warehouses" }] },
@@ -518,6 +528,7 @@ export default function Home() {
               <Plus size={18} /> New order
             </button>
           )}
+          {["Leads", "Enquiries", "Follow-ups", "Lost Leads"].includes(section) && <button className="primary" onClick={() => show("lead")}><Plus size={18}/> New lead</button>}
         </div>
         {section === "Overview" && (
           <Overview
@@ -542,6 +553,7 @@ export default function Home() {
             remove={(ids) => { setClients((current) => current.filter((item) => !ids.includes(item.id))); logActivity("Removed client", "Clients", ids.join(", ")); flash(`${ids.length} client${ids.length === 1 ? "" : "s"} removed`); }}
           />
         )}{" "}
+        {["Leads", "Enquiries", "Follow-ups", "Lost Leads"].includes(section) && <LeadsPanel leads={leads.filter((lead) => { if (section === "Enquiries") return ["Requirement Received", "Quotation Sent", "Negotiation", "Confirmed"].includes(lead.status); if (section === "Follow-ups") return ["New", "Contacted", "Requirement Received", "Quotation Sent", "Negotiation"].includes(lead.status); if (section === "Lost Leads") return lead.status === "Lost"; return true; }).filter((lead) => `${lead.id} ${lead.company} ${lead.contact} ${lead.city}`.toLowerCase().includes(search.toLowerCase()))} edit={(lead) => show("lead", lead)} updateStage={(id, status) => { setLeads((current) => current.map((lead) => lead.id === id ? { ...lead, status } : lead)); logActivity("Updated lead stage", "Leads", `${id} → ${status}`); flash(`Lead moved to ${status}`); }} remove={(id) => { setLeads((current) => current.filter((lead) => lead.id !== id)); logActivity("Removed lead", "Leads", id); flash("Lead removed"); }} />}{" "}
         {section === "Invoices" && (
           <Invoices
             invoices={invoices.filter((i) =>
@@ -562,7 +574,7 @@ export default function Home() {
           />
         )}{" "}
         {section === "Settings" && <TeamAccess members={members} workspaceOwnerId={workspaceOwnerId} canManage={isAdmin} onChange={setMembers} onAudit={logActivity} auditEvents={auditEvents} />}{" "}
-        {!(["Overview", "Orders", "Clients", "Invoices", "Catalogue", "Settings"].includes(section)) && (
+        {!(["Overview", "Orders", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Invoices", "Catalogue", "Settings"].includes(section)) && (
           <section className="panel coming">
             <div className="modal-mark">
               <ClipboardList size={22} />
@@ -646,6 +658,7 @@ export default function Home() {
           }}
         />
       )}
+      {modal === "lead" && <LeadModal lead={editing} close={() => setModal(null)} save={(lead) => { setLeads((current) => editing ? current.map((item) => item.id === editing.id ? lead : item) : [...current, lead]); setModal(null); logActivity(editing ? "Updated lead" : "Created lead", "Leads", `${lead.id} · ${lead.company}`); flash(editing ? "Lead updated" : "New lead created"); }} />}
       {toast && (
         <div className="toast">
           <PackageCheck size={18} />
@@ -978,6 +991,12 @@ function Clients({
       </div>
     </section>
   );
+}
+const leadStages: LeadStage[] = ["New", "Contacted", "Requirement Received", "Quotation Sent", "Negotiation", "Confirmed", "Order Created", "Lost"];
+const leadSources = ["WhatsApp", "Phone", "IndiaMART", "TradeIndia", "JD Mart", "Instagram", "Website", "Referral", "Existing customer", "Exhibition", "Salesperson", "Other"];
+const lostReasons = ["Price", "Out of stock", "Competitor", "Customer cancelled", "No response", "Payment issue", "Other"];
+function LeadsPanel({ leads, edit, updateStage, remove }: { leads: Lead[]; edit: (lead: Lead) => void; updateStage: (id: string, status: LeadStage) => void; remove: (id: string) => void }) {
+  return <section className="panel record-panel leads-panel"><div className="panel-head"><div><span className="overline">LEAD → ENQUIRY → QUOTE → ORDER</span><h2>Sales pipeline</h2><p>Qualify enquiries before creating customer orders.</p></div><div className="lead-stage-summary">{leadStages.slice(0, 7).map((stage) => <span key={stage}><b>{leads.filter((lead) => lead.status === stage).length}</b>{stage}</span>)}</div></div><div className="table-wrap"><table className="records"><thead><tr><th>LEAD</th><th>COMPANY / CONTACT</th><th>SOURCE</th><th>REQUIREMENT</th><th>EXPECTED VALUE</th><th>OWNER</th><th>EXPECTED DATE</th><th>STAGE</th><th/></tr></thead><tbody>{leads.map((lead) => <tr key={lead.id}><td><b>{lead.id}</b></td><td><div><b>{lead.company}</b><small className="table-subtext">{lead.contact} · {lead.mobile} · {lead.city}</small></div></td><td>{lead.source}</td><td className="lead-requirement">{lead.requirement}</td><td><b>{lead.expectedValue || "—"}</b></td><td>{lead.salesperson || "—"}</td><td>{lead.expectedDate ? new Date(lead.expectedDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}</td><td><select className="lead-stage-select" value={lead.status} onChange={(event) => updateStage(lead.id, event.target.value as LeadStage)}>{leadStages.map((stage) => <option key={stage}>{stage}</option>)}</select>{lead.status === "Lost" && <small className="table-subtext">{lead.lostReason || "Reason needed"}</small>}</td><td><div className="record-actions"><button className="edit-btn" type="button" onClick={() => edit(lead)} aria-label={`Edit ${lead.id}`}><Pencil size={14}/></button><button className="row-delete" type="button" onClick={() => window.confirm(`Remove ${lead.id}?`) && remove(lead.id)} aria-label={`Remove ${lead.id}`}><Trash2 size={14}/></button></div></td></tr>)}</tbody></table>{!leads.length && <div className="empty">No leads in this view. Create a lead to start the sales pipeline.</div>}</div></section>;
 }
 function ClientProfile({ client, orders, invoices, catalogue, auditEvents, close, edit }: { client: Client; orders: Order[]; invoices: Invoice[]; catalogue: CatalogueItem[]; auditEvents: AuditEvent[]; close: () => void; edit: () => void }) {
   const clientOrders = orders.filter((order) => order.client === client.name);
@@ -1467,6 +1486,12 @@ function ClientModal({
       </button>
     </Shell>
   );
+}
+function LeadModal({ lead, close, save }: { lead: Lead | null; close: () => void; save: (lead: Lead) => void }) {
+  const initial: Lead = lead || { id: `LEAD-${String(Date.now()).slice(-6)}`, company: "", contact: "", mobile: "", city: "", source: "WhatsApp", salesperson: "", requirement: "", expectedValue: "", expectedDate: "", status: "New", lostReason: "", createdAt: new Date().toISOString().slice(0, 10) };
+  const [form, setForm] = useState<Lead>(initial);
+  const set = (key: keyof Lead, value: string) => setForm({ ...form, [key]: value });
+  return <Shell close={close}><div className="modal-mark"><Target size={22}/></div><h2>{lead ? "Edit lead" : "New lead"}</h2><p>Capture the enquiry first, then progress it through quote and order stages.</p><div className="modal-section-title">Lead details</div><div className="form-row"><label>Lead ID<input value={form.id} onChange={(event) => set("id", event.target.value.toUpperCase())}/></label><label>Company<input value={form.company} onChange={(event) => set("company", event.target.value)} required/></label></div><div className="form-row"><label>Contact person<input value={form.contact} onChange={(event) => set("contact", event.target.value)} required/></label><label>Mobile<input value={form.mobile} onChange={(event) => set("mobile", event.target.value)} required/></label></div><div className="form-row"><label>City<input value={form.city} onChange={(event) => set("city", event.target.value)}/></label><label>Source<select value={form.source} onChange={(event) => set("source", event.target.value)}>{leadSources.map((source) => <option key={source}>{source}</option>)}</select></label></div><label>Requirement<textarea value={form.requirement} onChange={(event) => set("requirement", event.target.value)} placeholder="Products, quantity, event or business requirement"/></label><div className="modal-section-title">Qualification & follow-up</div><div className="form-row"><label>Assigned salesperson<input value={form.salesperson} onChange={(event) => set("salesperson", event.target.value)} placeholder="Employee name"/></label><label>Expected order value<input value={form.expectedValue} onChange={(event) => set("expectedValue", event.target.value)} placeholder="₹ 0"/></label></div><div className="form-row"><label>Expected order date<input type="date" value={form.expectedDate} onChange={(event) => set("expectedDate", event.target.value)}/></label><label>Stage<select value={form.status} onChange={(event) => set("status", event.target.value)}>{leadStages.map((stage) => <option key={stage}>{stage}</option>)}</select></label></div>{form.status === "Lost" && <label>Lost reason<select value={form.lostReason || ""} onChange={(event) => set("lostReason", event.target.value)}><option value="">Select reason</option>{lostReasons.map((reason) => <option key={reason}>{reason}</option>)}</select></label>}<button className="primary modal-submit" type="button" onClick={() => save(form)}>Save lead</button></Shell>;
 }
 function InvoiceModal({
   invoice,
