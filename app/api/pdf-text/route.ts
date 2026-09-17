@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { mkdir, writeFile } from "node:fs/promises";
 import { createCanvas, DOMMatrix, ImageData, Path2D } from "@napi-rs/canvas";
 
 export const runtime = "nodejs";
@@ -49,8 +48,7 @@ export async function POST(request: Request) {
       const viewport = page.getViewport({ scale: 1 });
       const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
       await page.render({ canvas: canvas as any, canvasContext: canvas.getContext("2d") as any, viewport }).promise;
-      const output = join(process.cwd(), "public", "catalogue-imports"); await mkdir(output, { recursive: true });
-      for (const [productIndex, product] of products.entries()) {
+      for (const product of products) {
         const next = products.filter((candidate) => candidate.column === product.column && candidate.y < product.y).sort((a, b) => b.y - a.y)[0];
         const rowTop = viewport.height - product.y;
         const cropTop = Math.min(Math.max(rowTop + 68, 0), viewport.height - 1);
@@ -59,8 +57,9 @@ export async function POST(request: Request) {
         const cropWidth = Math.floor(viewport.width / 2) - 12;
         const cropX = product.column === "left" ? 6 : Math.floor(viewport.width / 2) + 6;
         const crop = createCanvas(cropWidth, cropHeight); crop.getContext("2d").drawImage(canvas, cropX, cropTop, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-        const fileName = `catalogue-${Date.now()}-${index + 1}-${productIndex}.png`;
-        await writeFile(join(output, fileName), crop.toBuffer("image/png")); product.image = `/catalogue-imports/${fileName}`;
+        // Vercel's deployed filesystem is read-only. Return compact image data
+        // with the parsed product instead of attempting to write inside /var/task.
+        product.image = crop.toDataURL("image/jpeg", 0.58);
       }
       return { text: items.map((item) => item.text).join(" "), products };
     }));

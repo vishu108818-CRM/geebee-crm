@@ -12,6 +12,7 @@ import "./quotes.css";
 import "./products.css";
 import "./automation.css";
 import "./tasks.css";
+import "./reports.css";
 import { supabase } from "./lib/supabase";
 import type { Session } from "@supabase/supabase-js";
 import {
@@ -63,6 +64,7 @@ type Order = {
   payment: string;
   avatar: string;
   products?: ProductLine[];
+  backorders?: ProductLine[];
 };
 type Client = {
   id: number;
@@ -582,7 +584,9 @@ export default function Home() {
         {["Leads", "Enquiries", "Lost Leads"].includes(section) && <LeadsPanel leads={leads.filter((lead) => { if (section === "Enquiries") return ["Requirement Received", "Quotation Sent", "Negotiation", "Confirmed"].includes(lead.status); if (section === "Lost Leads") return lead.status === "Lost"; return true; }).filter((lead) => `${lead.id} ${lead.company} ${lead.contact} ${lead.city}`.toLowerCase().includes(search.toLowerCase()))} edit={(lead) => show("lead", lead)} updateStage={(id, status) => { setLeads((current) => current.map((lead) => lead.id === id ? { ...lead, status } : lead)); logActivity("Updated lead stage", "Leads", `${id} → ${status}`); flash(`Lead moved to ${status}`); }} remove={(id) => { setLeads((current) => current.filter((lead) => lead.id !== id)); logActivity("Removed lead", "Leads", id); flash("Lead removed"); }} />}{" "}
         {section === "Follow-ups" && <TasksDashboard tasks={tasks} leads={leads} quotes={quotes} invoices={invoices} orders={orders} toggle={(id) => { setTasks((current) => current.map((task) => task.id === id ? { ...task, status: task.status === "Done" ? "Open" : "Done" } : task)); logActivity("Updated task", "Follow-ups", id); }} edit={(task) => show("task", task)} />}{" "}
         {section === "Sales Team Report" && <SalesTeamDashboard leads={leads} quotes={quotes} orders={orders} invoices={invoices} />}{" "}
+        {["Sales Report", "Customer Report", "Product Report", "Inventory Report", "Payment Report"].includes(section) && <ReportsDashboard orders={orders} clients={clients} catalogue={catalogue} leads={leads} quotes={quotes} invoices={invoices} />}{" "}
         {section === "Quotations" && <QuotesPanel quotes={quotes.filter((quote) => `${quote.id} ${quote.customer}`.toLowerCase().includes(search.toLowerCase()))} edit={(quote) => show("quote", quote)} remove={(id) => { setQuotes((current) => current.filter((quote) => quote.id !== id)); logActivity("Removed quotation", "Quotations", id); flash("Quotation removed"); }} convert={(quote) => { const customer = clients.find((client) => client.name === quote.customer); const first = quote.products[0] || { product: "", sku: "", quantity: 0, unitPrice: 0, discount: 0 }; const products = quote.products.map(({ discount: _discount, ...product }) => product); const order: Order = { id: `GB-${String(Date.now()).slice(-5)}`, client: quote.customer, city: customer?.city || "", product: first.product, sku: first.sku, quantity: first.quantity, unitPrice: first.unitPrice * (1 - first.discount / 100), products, eta: "", status: "Confirmed", payment: "Partial", avatar: customer?.avatar || initials(quote.customer) }; setOrders((current) => [...current, order]); setQuotes((current) => current.map((item) => item.id === quote.id ? { ...item, status: "Converted" } : item)); logActivity("Converted quotation to order", "Quotations", `${quote.id} → ${order.id}`); flash(`Order ${order.id} created from ${quote.id}`); }} />}{" "}
+        {section === "Backorders" && <BackordersPanel orders={orders.filter((order) => order.backorders?.length)} />}{" "}
         {section === "Invoices" && (
           <Invoices
             invoices={invoices.filter((i) =>
@@ -605,7 +609,7 @@ export default function Home() {
         )}{" "}
         {section === "Settings" && <TeamAccess members={members} workspaceOwnerId={workspaceOwnerId} canManage={isAdmin} onChange={setMembers} onAudit={logActivity} auditEvents={auditEvents} />}{" "}
         {section === "Notifications" && <AutomationPanel />}{" "}
-        {!(["Overview", "Orders", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Invoices", "Catalogue", "Settings", "Notifications", "Sales Team Report"].includes(section)) && (
+        {!(["Overview", "Orders", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Backorders", "Invoices", "Catalogue", "Settings", "Notifications", "Sales Team Report", "Sales Report", "Customer Report", "Product Report", "Inventory Report", "Payment Report"].includes(section)) && (
           <section className="panel coming">
             <div className="modal-mark">
               <ClipboardList size={22} />
@@ -624,15 +628,33 @@ export default function Home() {
           catalogue={catalogue}
           close={() => setModal(null)}
           save={(o) => {
+            let savedOrder = o;
+            if (!editing) {
+              const shortages: ProductLine[] = [];
+              setCatalogue((current) => current.map((product) => {
+                const requested = linesFor(o).find((line) => line.sku === product.sku);
+                if (!requested) return product;
+                const dispatchNow = Math.max(0, Math.min(requested.quantity, freeStock(product)));
+                const short = Math.max(0, requested.quantity - dispatchNow);
+                if (short) shortages.push({ ...requested, quantity: short });
+                return { ...product, orderedStock: (product.orderedStock || 0) + dispatchNow, reservedStock: (product.reservedStock || 0) + short };
+              }));
+              savedOrder = { ...o, backorders: shortages };
+              if (shortages.length) {
+                const advanceAmount = shortages.reduce((total, line) => total + line.quantity * line.unitPrice, 0);
+                setInvoices((current) => [...current, { id: `ADV-${o.id}`, client: o.client, order: o.id, amount: money(advanceAmount), due: "Advance payment", status: "Partial" }]);
+                setTasks((current) => [...current, { id: `TASK-${Date.now()}`, title: `Arrange future dispatch for backorder ${o.id}`, time: "10:00", dueDate: new Date().toISOString().slice(0, 10), assignee: "Rahul", type: "Follow-up", status: "Open", relatedTo: o.id }]);
+              }
+            }
             setOrders((x) =>
-              editing ? x.map((y) => (y.id === editing.id ? o : y)) : [...x, o],
+              editing ? x.map((y) => (y.id === editing.id ? savedOrder : y)) : [...x, savedOrder],
             );
             setModal(null);
             logActivity(editing ? "Updated order" : "Created order", "Orders", o.id);
             flash(
               editing
                 ? "Order updated successfully"
-                : "New order created successfully",
+                : savedOrder.backorders?.length ? `Order created with ${savedOrder.backorders.length} backorder line(s) and advance invoice` : "New order created successfully",
             );
           }}
         />
@@ -1066,6 +1088,13 @@ function TasksDashboard({ tasks, leads, quotes, invoices, orders, toggle, edit }
 function SalesTeamDashboard({ leads, quotes, orders, invoices }: { leads: Lead[]; quotes: Quote[]; orders: Order[]; invoices: Invoice[] }) {
   const totalSales = orders.reduce((total, order) => total + orderTotal(order), 0); const collections = invoices.filter((invoice) => invoice.status === "Paid").reduce((total, invoice) => total + (Number(invoice.amount.replace(/[^0-9.]/g, "")) || 0), 0); const outstanding = invoices.filter((invoice) => invoice.status !== "Paid").reduce((total, invoice) => total + (Number(invoice.amount.replace(/[^0-9.]/g, "")) || 0), 0); const activeLeads = leads.filter((lead) => lead.status !== "Lost"); const conversion = activeLeads.length ? Math.round((orders.length / activeLeads.length) * 100) : 0;
   return <section className="panel sales-dashboard"><div className="panel-head"><div><span className="overline">SALES TEAM MANAGEMENT</span><h2>Rahul</h2><p>Pipeline, conversion, sales and collections performance.</p></div></div><div className="sales-metric-grid">{[["Leads", activeLeads.length], ["Enquiries", leads.filter((lead) => ["Requirement Received", "Quotation Sent", "Negotiation", "Confirmed"].includes(lead.status)).length], ["Quotes", quotes.length], ["Orders", orders.length], ["Conversion", `${conversion}%`], ["Sales", money(totalSales)], ["Collections", money(collections)], ["Outstanding", money(outstanding)], ["Lost leads", leads.filter((lead) => lead.status === "Lost").length]].map(([label, value]) => <article key={String(label)}><span>{label}</span><b>{value}</b></article>)}</div><div className="sales-detail-strip"><span>Calls and follow-ups are managed in the Follow-ups workspace.</span><span>Quotes, orders, collections and lost leads update from their respective modules.</span></div></section>;
+}
+function ReportsDashboard({ orders, clients, catalogue, leads, quotes, invoices }: { orders: Order[]; clients: Client[]; catalogue: CatalogueItem[]; leads: Lead[]; quotes: Quote[]; invoices: Invoice[] }) {
+  const sales = orders.reduce((total, order) => total + orderTotal(order), 0); const paid = invoices.filter((invoice) => invoice.status === "Paid").reduce((total, invoice) => total + (Number(invoice.amount.replace(/[^0-9.]/g, "")) || 0), 0); const outstanding = invoices.filter((invoice) => invoice.status !== "Paid").reduce((total, invoice) => total + (Number(invoice.amount.replace(/[^0-9.]/g, "")) || 0), 0); const productSales = catalogue.map((product) => ({ product, sold: orders.flatMap(linesFor).filter((line) => line.sku === product.sku).reduce((total, line) => total + line.quantity, 0), revenue: orders.flatMap(linesFor).filter((line) => line.sku === product.sku).reduce((total, line) => total + line.quantity * line.unitPrice, 0) })).sort((a, b) => b.sold - a.sold); const customerSales = clients.map((client) => ({ client, sales: orders.filter((order) => order.client === client.name).reduce((total, order) => total + orderTotal(order), 0) })).sort((a, b) => b.sales - a.sales); const grossMargin = productSales.reduce((total, item) => total + item.revenue - item.sold * (item.product.purchasePrice || 0), 0); const funnel = [["Leads", leads.length], ["Contacted", leads.filter((lead) => lead.status !== "New" && lead.status !== "Lost").length], ["Enquiries", leads.filter((lead) => ["Requirement Received", "Quotation Sent", "Negotiation", "Confirmed", "Order Created"].includes(lead.status)).length], ["Quotes", quotes.length], ["Orders", orders.length]];
+  return <section className="reports-workspace"><div className="report-hero"><div><span className="overline">REPORTS & ANALYTICS</span><h2>Business intelligence for GeeBee</h2><p>Live calculations from customers, products, sales, quotations, orders and invoices.</p></div><b>{money(sales)}<small>sales value</small></b></div><div className="report-metrics">{[["Daily sales", money(sales)], ["Monthly sales", money(sales)], ["Collections", money(paid)], ["Outstanding", money(outstanding)], ["Gross margin", money(grossMargin)], ["Average order", money(orders.length ? sales / orders.length : 0)]].map(([label, value]) => <article key={label}><span>{label}</span><b>{value}</b></article>)}</div><div className="report-grid"><section className="panel"><h3>Sales funnel</h3><div className="funnel">{funnel.map(([label, value], index) => <div key={String(label)}><span style={{ width: `${Math.max(20, 100 - index * 13)}%` }}><b>{value}</b> {label}</span></div>)}</div></section><section className="panel"><h3>Top customers</h3><div className="report-list">{customerSales.slice(0, 5).map((item) => <article key={item.client.id}><span>{item.client.name}</span><b>{money(item.sales)}</b></article>)}</div></section><section className="panel"><h3>Product performance</h3><div className="report-list">{productSales.slice(0, 5).map((item) => <article key={item.product.id}><span>{item.product.sku} · {item.product.name}</span><b>{item.sold.toLocaleString("en-IN")} sold</b></article>)}</div><p className="report-note">Lowest-selling SKU: {productSales.at(-1)?.product.sku || "—"} · Dead stock: {catalogue.filter((product) => availableStock(product) > 0 && !productSales.find((item) => item.product.id === product.id)?.sold).length} SKUs</p></section><section className="panel"><h3>Inventory health</h3><div className="report-list"><article><span>Available stock</span><b>{catalogue.reduce((total, product) => total + availableStock(product), 0).toLocaleString("en-IN")}</b></article><article><span>Reserved stock</span><b>{catalogue.reduce((total, product) => total + (product.reservedStock || 0), 0).toLocaleString("en-IN")}</b></article><article><span>Low / negative free stock</span><b>{catalogue.filter((product) => freeStock(product) <= 0).length} SKUs</b></article></div></section></div></section>;
+}
+function BackordersPanel({ orders }: { orders: Order[] }) {
+  return <section className="panel backorders-panel"><div className="panel-head"><div><span className="overline">BACKORDER & ADVANCE INVOICE</span><h2>Future fulfilment</h2><p>Short quantities are reserved, given an advance invoice, and tracked until future dispatch.</p></div></div>{orders.map((order) => <article className="backorder-card" key={order.id}><div><b>{order.id}</b><span>{order.client}</span></div><div className="backorder-flow"><span>Available stock<br/><b>Dispatch now</b></span><i>→</i><span>Short quantity<br/><b>Backorder</b></span><i>→</i><span>ADV-{order.id}<br/><b>Advance invoice</b></span><i>→</i><span>Reserved<br/><b>Future dispatch</b></span></div><div className="backorder-lines">{order.backorders?.map((line) => <p key={line.sku}><b>{line.sku}</b> {line.product} <strong>{line.quantity.toLocaleString("en-IN")} units</strong></p>)}</div></article>)}{!orders.length && <div className="empty">No active backorders. New orders will be split automatically when ordered quantity exceeds free stock.</div>}</section>;
 }
 function LeadsPanel({ leads, edit, updateStage, remove }: { leads: Lead[]; edit: (lead: Lead) => void; updateStage: (id: string, status: LeadStage) => void; remove: (id: string) => void }) {
   return <section className="panel record-panel leads-panel"><div className="panel-head"><div><span className="overline">LEAD → ENQUIRY → QUOTE → ORDER</span><h2>Sales pipeline</h2><p>Qualify enquiries before creating customer orders.</p></div><div className="lead-stage-summary">{leadStages.slice(0, 7).map((stage) => <span key={stage}><b>{leads.filter((lead) => lead.status === stage).length}</b>{stage}</span>)}</div></div><div className="table-wrap"><table className="records"><thead><tr><th>LEAD</th><th>COMPANY / CONTACT</th><th>SOURCE</th><th>REQUIREMENT</th><th>EXPECTED VALUE</th><th>OWNER</th><th>EXPECTED DATE</th><th>STAGE</th><th/></tr></thead><tbody>{leads.map((lead) => <tr key={lead.id}><td><b>{lead.id}</b></td><td><div><b>{lead.company}</b><small className="table-subtext">{lead.contact} · {lead.mobile} · {lead.city}</small></div></td><td>{lead.source}</td><td className="lead-requirement">{lead.requirement}</td><td><b>{lead.expectedValue || "—"}</b></td><td>{lead.salesperson || "—"}</td><td>{lead.expectedDate ? new Date(lead.expectedDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}</td><td><select className="lead-stage-select" value={lead.status} onChange={(event) => updateStage(lead.id, event.target.value as LeadStage)}>{leadStages.map((stage) => <option key={stage}>{stage}</option>)}</select>{lead.status === "Lost" && <small className="table-subtext">{lead.lostReason || "Reason needed"}</small>}</td><td><div className="record-actions"><button className="edit-btn" type="button" onClick={() => edit(lead)} aria-label={`Edit ${lead.id}`}><Pencil size={14}/></button><button className="row-delete" type="button" onClick={() => window.confirm(`Remove ${lead.id}?`) && remove(lead.id)} aria-label={`Remove ${lead.id}`}><Trash2 size={14}/></button></div></td></tr>)}</tbody></table>{!leads.length && <div className="empty">No leads in this view. Create a lead to start the sales pipeline.</div>}</div></section>;
