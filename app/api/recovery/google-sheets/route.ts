@@ -73,21 +73,34 @@ function restoreData(rows: Record<Tab, Row[]>) {
 }
 
 export async function GET(request: Request) {
-  try { await context(request); const backup = await readBackup(); return Response.json({ ok: true, counts: backup.counts }); }
+  try {
+    const { db, ownerId } = await context(request);
+    const backup = await readBackup();
+    const { data: snapshots } = await db.from("crm_recovery_snapshots").select("id, source, created_at").eq("workspace_owner_id", ownerId).order("created_at", { ascending: false }).limit(5);
+    return Response.json({ ok: true, counts: backup.counts, snapshots: snapshots || [] });
+  }
   catch (error) { return Response.json({ error: error instanceof Error ? error.message : "Could not read the recovery backup." }, { status: 400 }); }
 }
 
 export async function POST(request: Request) {
   try {
-    const { confirm } = await request.json();
+    const { confirm, snapshotId } = await request.json();
     if (confirm !== "RESTORE GEEBEE") return Response.json({ error: "Type RESTORE GEEBEE exactly to approve this recovery." }, { status: 400 });
     const { db, ownerId, email } = await context(request);
-    const backup = await readBackup();
-    const restored = restoreData(backup.rows);
     const { data: current, error: currentError } = await db.from("crm_workspaces").select("data").eq("owner_id", ownerId).single();
     if (currentError || !current) throw new Error("The live workspace could not be protected before recovery.");
     const { error: snapshotError } = await db.from("crm_recovery_snapshots").insert({ workspace_owner_id: ownerId, restored_by: email, data: current.data });
     if (snapshotError) throw new Error("Recovery snapshot storage is not ready. Run the latest Supabase schema before restoring.");
+    if (snapshotId) {
+      const { data: snapshot, error: snapshotReadError } = await db.from("crm_recovery_snapshots").select("data").eq("workspace_owner_id", ownerId).eq("id", snapshotId).single();
+      if (snapshotReadError || !snapshot) throw new Error("That recovery snapshot is no longer available.");
+      const { error: undoError } = await db.from("crm_workspaces").update({ data: snapshot.data, updated_at: new Date().toISOString() }).eq("owner_id", ownerId);
+      if (undoError) throw undoError;
+      await db.from("crm_audit_events").insert({ workspace_owner_id: ownerId, actor_email: email, action: "Restored pre-recovery snapshot", module: "Data recovery", details: `Snapshot ${snapshotId}` });
+      return Response.json({ ok: true, data: snapshot.data });
+    }
+    const backup = await readBackup();
+    const restored = restoreData(backup.rows);
     const { error: updateError } = await db.from("crm_workspaces").update({ data: restored, updated_at: new Date().toISOString() }).eq("owner_id", ownerId);
     if (updateError) throw updateError;
     await db.from("crm_audit_events").insert({ workspace_owner_id: ownerId, actor_email: email, action: "Restored Google Sheets backup", module: "Data recovery", details: Object.entries(backup.counts).map(([tab, count]) => `${tab}: ${count}`).join(" | ") });
