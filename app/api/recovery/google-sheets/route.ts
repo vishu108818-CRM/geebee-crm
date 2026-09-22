@@ -3,7 +3,7 @@ import { google } from "googleapis";
 
 export const runtime = "nodejs";
 
-const sheetTabs = ["Customers", "Products", "Orders", "Quotes", "Invoices", "Leads", "Tasks"] as const;
+const sheetTabs = ["Customers", "Products", "Orders", "Backorders", "Quotes", "Invoices", "Leads", "Tasks"] as const;
 type Tab = typeof sheetTabs[number];
 type Row = Record<string, string>;
 
@@ -46,21 +46,25 @@ async function readBackup() {
   const values = result.data.valueRanges || [];
   const rows = {} as Record<Tab, Row[]>;
   const counts = {} as Record<Tab, number>;
+  const headers = {} as Record<Tab, string[]>;
   sheetTabs.forEach((tab, index) => {
     const data = values[index]?.values || [];
     const header = (data[0] || []).map(String);
     if (!header.length) throw new Error(`The ${tab} tab is missing or empty. Use a GeeBee backup sheet.`);
+    headers[tab] = header;
     rows[tab] = data.slice(1).filter((line) => line.some((value: unknown) => String(value).trim())).map((line) => Object.fromEntries(header.map((name, column) => [name, String(line[column] ?? "")]))) as Row[];
     counts[tab] = rows[tab].length;
   });
-  if (!rows.Customers.every((row) => "Business Name" in row) || !rows.Products.every((row) => "SKU" in row)) throw new Error("This is not a valid GeeBee recovery backup. Do not rename backup headers.");
+  if (!headers.Customers.includes("Business Name") || !headers.Products.includes("SKU") || !headers.Orders.includes("Order ID")) throw new Error("This is not a valid GeeBee recovery backup. Do not rename backup headers.");
   return { rows, counts };
 }
 
 function restoreData(rows: Record<Tab, Row[]>) {
   const clients = rows.Customers.map((row, index) => ({ id: number(row["Record ID"]) || Date.now() + index, customerId: row["Customer ID"], name: row["Business Name"], contact: row["Contact Person"], phone: row.Mobile, whatsapp: row.WhatsApp, email: row.Email, gstin: row.GSTIN, pan: row.PAN, businessType: row["Business Type"], customerCategory: row["Customer Category"], state: row.State, city: row.City, address: row.Address, pincode: row.Pincode, credit: row["Credit Limit"], paymentTerms: row["Payment Terms"], assignedSalesperson: row["Assigned Salesperson"], customerStatus: row["Customer Status"], specialRates: json(row["Special Rates JSON"], []), avatar: initials(row["Business Name"] || "Customer") }));
   const catalogue = rows.Products.map((row, index) => ({ id: number(row["Record ID"]) || Date.now() + 1000 + index, sku: row.SKU, name: row["Product Name"], category: row.Category, subCategory: row["Sub-category"], brand: row.Brand, description: row.Description, cartonQty: row["Carton Qty"] || "", image: "", unit: row.Unit, packSize: row["Pack Size"], moq: number(row.MOQ), purchasePrice: number(row["Purchase Price"]), unitPrice: number(row["Selling Price"]), wholesalePrice: number(row["Wholesale Price"]), distributorPrice: number(row["Distributor Price"]), gst: number(row["GST %"]), barcode: row.Barcode, weight: row.Weight, dimensions: row.Dimensions, supplier: row.Supplier, countryOfOrigin: row["Country of Origin"], openingStock: number(row["Opening Stock"]), purchasedStock: number(row.Purchase), orderedStock: number(row.Orders), damagedStock: number(row.Damaged), reservedStock: number(row.Reserved) }));
-  const orders = rows.Orders.map((row) => { const products = json(row["Products JSON"], [] as unknown[]); const client = row.Customer || "Customer"; return { id: row["Order ID"], client: row.Customer, city: row.City, product: row.Product, sku: row.SKU, quantity: number(row.Quantity), unitPrice: number(row["Unit Price"]), eta: row.ETA, status: row.Status, payment: row["Payment Status"], products, avatar: initials(client) }; });
+  const backorders = new Map<string, unknown[]>();
+  rows.Backorders.forEach((row) => { const orderId = row["Order ID"]; if (!orderId) return; backorders.set(orderId, [...(backorders.get(orderId) || []), { sku: row.SKU, product: row.Product, quantity: number(row["Short Quantity"]), unitPrice: number(row["Unit Price"]) }]); });
+  const orders = rows.Orders.map((row) => { const products = json(row["Products JSON"], [] as unknown[]); const client = row.Customer || "Customer"; return { id: row["Order ID"], client: row.Customer, city: row.City, product: row.Product, sku: row.SKU, quantity: number(row.Quantity), unitPrice: number(row["Unit Price"]), eta: row.ETA, status: row.Status, payment: row["Payment Status"], products, backorders: backorders.get(row["Order ID"]), avatar: initials(client) }; });
   const quotes = rows.Quotes.map((row) => ({ id: row["Quote Number"], customer: row.Customer, products: json(row["Products JSON"], []), gst: number(row["GST %"]), freight: number(row.Freight), validity: row.Validity, paymentTerms: row["Payment Terms"], deliveryTerms: row["Delivery Terms"], status: row.Status || "Draft", createdAt: row["Created At"] }));
   const invoices = rows.Invoices.map((row) => ({ id: row["Invoice Number"], client: row.Customer, order: row.Order, amount: row.Amount, due: row.Due, status: row.Status }));
   const leads = rows.Leads.map((row) => ({ id: row["Lead ID"], company: row.Company, contact: row["Contact Person"], mobile: row.Mobile, city: row.City, source: row.Source, salesperson: row["Assigned Salesperson"], requirement: row.Requirement, expectedValue: row["Expected Order Value"], expectedDate: row["Expected Order Date"], status: row.Status || "New", lostReason: row["Lost Reason"], createdAt: row["Created At"] }));
