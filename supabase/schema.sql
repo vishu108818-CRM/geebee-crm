@@ -83,6 +83,21 @@ create policy "Workspace can read audit history" on public.crm_audit_events for 
 drop policy if exists "Workspace can write audit history" on public.crm_audit_events;
 create policy "Workspace can write audit history" on public.crm_audit_events for insert to authenticated with check (workspace_owner_id = auth.uid() or exists (select 1 from public.crm_workspace_members m where m.workspace_owner_id = crm_audit_events.workspace_owner_id and lower(m.email) = lower(coalesce(auth.jwt() ->> 'email', ''))));
 
+-- Immutable server-side snapshot created immediately before a Google Sheets
+-- recovery. This gives an administrator a second safe state if the wrong
+-- spreadsheet is selected during a restore.
+create table if not exists public.crm_recovery_snapshots (
+  id bigint generated always as identity primary key,
+  workspace_owner_id uuid not null references public.crm_workspaces(owner_id) on delete cascade,
+  restored_by text not null,
+  source text not null default 'Google Sheets',
+  data jsonb not null,
+  created_at timestamptz not null default now()
+);
+alter table public.crm_recovery_snapshots enable row level security;
+drop policy if exists "Workspace owners view recovery snapshots" on public.crm_recovery_snapshots;
+create policy "Workspace owners view recovery snapshots" on public.crm_recovery_snapshots for select to authenticated using (workspace_owner_id = auth.uid());
+
 -- Large catalogue PDFs are uploaded directly to Supabase Storage first, avoiding
 -- the smaller request limit on the hosted application server.
 insert into storage.buckets (id, name, public, file_size_limit)

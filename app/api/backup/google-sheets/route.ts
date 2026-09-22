@@ -6,8 +6,8 @@ export const runtime = "nodejs";
 type Workspace = { owner_id: string; data: Record<string, unknown>; updated_at: string };
 
 const headers = {
-  Customers: ["Customer ID", "Business Name", "Contact Person", "Mobile", "WhatsApp", "Email", "GSTIN", "PAN", "Business Type", "Customer Category", "State", "City", "Address", "Pincode", "Credit Limit", "Payment Terms", "Assigned Salesperson", "Customer Status", "Special Rates JSON"],
-  Products: ["SKU", "Product Name", "Category", "Sub-category", "Brand", "Description", "Unit", "Pack Size", "MOQ", "Purchase Price", "Selling Price", "Wholesale Price", "Distributor Price", "GST %", "Barcode", "Weight", "Dimensions", "Supplier", "Country of Origin", "Opening Stock", "Purchase", "Orders", "Damaged", "Reserved"],
+  Customers: ["Record ID", "Customer ID", "Business Name", "Contact Person", "Mobile", "WhatsApp", "Email", "GSTIN", "PAN", "Business Type", "Customer Category", "State", "City", "Address", "Pincode", "Credit Limit", "Payment Terms", "Assigned Salesperson", "Customer Status", "Special Rates JSON"],
+  Products: ["Record ID", "SKU", "Product Name", "Category", "Sub-category", "Brand", "Description", "Carton Qty", "Unit", "Pack Size", "MOQ", "Purchase Price", "Selling Price", "Wholesale Price", "Distributor Price", "GST %", "Barcode", "Weight", "Dimensions", "Supplier", "Country of Origin", "Opening Stock", "Purchase", "Orders", "Damaged", "Reserved"],
   Orders: ["Order ID", "Customer", "City", "Product", "SKU", "Quantity", "Unit Price", "ETA", "Status", "Payment Status", "Products JSON"],
   Backorders: ["Order ID", "Customer", "SKU", "Product", "Short Quantity", "Unit Price"],
   Quotes: ["Quote Number", "Customer", "Products JSON", "GST %", "Freight", "Validity", "Payment Terms", "Delivery Terms", "Status", "Created At"],
@@ -53,8 +53,8 @@ export async function GET(request: Request) {
     if (!workspace) throw new Error("No GeeBee workspace was found.");
     const data = workspace.data || {};
     const backupRows: Record<string, string[][]> = {
-      Customers: rows(data.clients, ["customerId", "name", "contact", "phone", "whatsapp", "email", "gstin", "pan", "businessType", "customerCategory", "state", "city", "address", "pincode", "credit", "paymentTerms", "assignedSalesperson", "customerStatus", "specialRates"]),
-      Products: rows(data.catalogue, ["sku", "name", "category", "subCategory", "brand", "description", "unit", "packSize", "moq", "purchasePrice", "unitPrice", "wholesalePrice", "distributorPrice", "gst", "barcode", "weight", "dimensions", "supplier", "countryOfOrigin", "openingStock", "purchasedStock", "orderedStock", "damagedStock", "reservedStock"]),
+      Customers: rows(data.clients, ["id", "customerId", "name", "contact", "phone", "whatsapp", "email", "gstin", "pan", "businessType", "customerCategory", "state", "city", "address", "pincode", "credit", "paymentTerms", "assignedSalesperson", "customerStatus", "specialRates"]),
+      Products: rows(data.catalogue, ["id", "sku", "name", "category", "subCategory", "brand", "description", "cartonQty", "unit", "packSize", "moq", "purchasePrice", "unitPrice", "wholesalePrice", "distributorPrice", "gst", "barcode", "weight", "dimensions", "supplier", "countryOfOrigin", "openingStock", "purchasedStock", "orderedStock", "damagedStock", "reservedStock"]),
       Orders: rows(data.orders, ["id", "client", "city", "product", "sku", "quantity", "unitPrice", "eta", "status", "payment", "products"]),
       Backorders: Array.isArray(data.orders) ? data.orders.flatMap((order: any) => Array.isArray(order.backorders) ? order.backorders.map((line: any) => [text(order.id), text(order.client), text(line.sku), text(line.product), text(line.quantity), text(line.unitPrice)]) : []) : [],
       Quotes: rows(data.quotes, ["id", "customer", "products", "gst", "freight", "validity", "paymentTerms", "deliveryTerms", "status", "createdAt"]),

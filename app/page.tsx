@@ -13,6 +13,7 @@ import "./products.css";
 import "./automation.css";
 import "./tasks.css";
 import "./reports.css";
+import "./recovery.css";
 import { supabase } from "./lib/supabase";
 import type { Session } from "@supabase/supabase-js";
 import {
@@ -32,6 +33,7 @@ import {
   Pencil,
   Plus,
   ReceiptText,
+  RotateCcw,
   Search,
   ScanText,
   Settings,
@@ -463,7 +465,7 @@ export default function Home() {
     { label: "Imports", icon: ShipWheel, items: [{ label: "Suppliers", section: "Suppliers" }, { label: "Purchase Orders", section: "Purchase Orders" }, { label: "Shipments", section: "Shipments", module: "Shipments" as CrmModule }, { label: "Containers", section: "Containers", module: "Shipments" as CrmModule }, { label: "Landed Cost", section: "Landed Cost", module: "Shipments" as CrmModule }] },
     { label: "Reports", icon: ChartNoAxesCombined, items: [{ label: "Sales", section: "Sales Report" }, { label: "Customers", section: "Customer Report" }, { label: "Products", section: "Product Report" }, { label: "Inventory", section: "Inventory Report" }, { label: "Payments", section: "Payment Report" }, { label: "Sales Team", section: "Sales Team Report" }] },
     { label: "Automation", icon: Bot, items: [{ label: "Rules", section: "Rules" }, { label: "Notifications", section: "Notifications" }, { label: "Templates", section: "Templates" }] },
-    { label: "Settings", icon: Settings, items: [{ label: "Users", section: "Settings" }, { label: "Roles", section: "Settings" }, { label: "GST", section: "GST" }, { label: "Warehouses", section: "Warehouses" }, { label: "WhatsApp", section: "WhatsApp" }, { label: "Integrations", section: "Integrations" }] },
+    { label: "Settings", icon: Settings, items: [{ label: "Users", section: "Settings" }, { label: "Roles", section: "Settings" }, { label: "Data recovery", section: "Recovery" }, { label: "GST", section: "GST" }, { label: "Warehouses", section: "Warehouses" }, { label: "WhatsApp", section: "WhatsApp" }, { label: "Integrations", section: "Integrations" }] },
   ];
   const notifications = [
     ...auditEvents.slice(0, 4).map((event) => ({ title: event.action, detail: `${event.actor_email} · ${event.module}`, time: new Date(event.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }) })),
@@ -608,8 +610,9 @@ export default function Home() {
           />
         )}{" "}
         {section === "Settings" && <TeamAccess members={members} workspaceOwnerId={workspaceOwnerId} canManage={isAdmin} onChange={setMembers} onAudit={logActivity} auditEvents={auditEvents} />}{" "}
+        {section === "Recovery" && <RecoveryPanel canManage={isAdmin} session={session} applyRestore={(data) => { setOrders(data.orders); setClients(data.clients); setInvoices(data.invoices); setCatalogue(data.catalogue); setLeads(data.leads); setQuotes(data.quotes); setTasks(data.tasks); logActivity("Applied Google Sheets recovery", "Data recovery", "Recovery snapshot created before restore"); flash("Backup restored. Your previous CRM state is saved as a recovery snapshot."); }} />}{" "}
         {section === "Notifications" && <AutomationPanel />}{" "}
-        {!(["Overview", "Orders", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Backorders", "Invoices", "Catalogue", "Settings", "Notifications", "Sales Team Report", "Sales Report", "Customer Report", "Product Report", "Inventory Report", "Payment Report"].includes(section)) && (
+        {!(["Overview", "Orders", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Backorders", "Invoices", "Catalogue", "Settings", "Recovery", "Notifications", "Sales Team Report", "Sales Report", "Customer Report", "Product Report", "Inventory Report", "Payment Report"].includes(section)) && (
           <section className="panel coming">
             <div className="modal-mark">
               <ClipboardList size={22} />
@@ -1122,6 +1125,27 @@ function ClientProfile({ client, orders, invoices, catalogue, auditEvents, close
     <section className="profile-section"><div className="profile-section-head"><h3>Customer timeline</h3><span>Latest activity</span></div><div className="customer-timeline">{timelineEvents.map((event) => <article key={event.id}><span className="timeline-dot"/><div><b>{event.action}</b><p>{event.actor_email} · {event.module}</p></div><time>{new Date(event.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</time></article>)}{clientInvoices.slice(0, 3).map((invoice) => <article key={`invoice-${invoice.id}`}><span className="timeline-dot invoice"/><div><b>Invoice {invoice.id} is {invoice.status.toLowerCase()}</b><p>{invoice.amount} · Due {invoice.due}</p></div></article>)}{clientOrders.slice(0, 3).map((order) => <article key={`order-${order.id}`}><span className="timeline-dot order"/><div><b>Order {order.id}</b><p>{order.product} · {money(orderTotal(order))}</p></div></article>)}{!timelineEvents.length && !clientInvoices.length && !clientOrders.length && <p className="profile-empty">Activity will appear here as this customer is engaged.</p>}</div></section>
   </Shell>;
 }
+function RecoveryPanel({ canManage, session, applyRestore }: { canManage: boolean; session: Session; applyRestore: (data: SavedCrmData) => void }) {
+  const [counts, setCounts] = useState<Record<string, number> | null>(null);
+  const [confirm, setConfirm] = useState("");
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+  if (!canManage) return <section className="panel coming"><div className="modal-mark"><RotateCcw size={22}/></div><h2>Data recovery</h2><p>Only administrators can preview or restore a GeeBee backup.</p></section>;
+  const request = async (method: "GET" | "POST") => {
+    setLoading(true); setMessage("");
+    try {
+      const response = await fetch("/api/recovery/google-sheets", { method, headers: { "Authorization": `Bearer ${session.access_token}`, ...(method === "POST" ? { "Content-Type": "application/json" } : {}) }, body: method === "POST" ? JSON.stringify({ confirm }) : undefined });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Recovery request failed.");
+      return result;
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Recovery request failed."); return null; }
+    finally { setLoading(false); }
+  };
+  const preview = async () => { const result = await request("GET"); if (result) { setCounts(result.counts); setConfirm(""); setMessage("Backup checked. Review the record counts before restoring."); } };
+  const restore = async () => { if (confirm !== "RESTORE GEEBEE") { setMessage("Type RESTORE GEEBEE exactly to enable recovery."); return; } if (!window.confirm("Restore this Google Sheets backup? Your current CRM data will be replaced, but a server-side recovery snapshot will be saved first.")) return; const result = await request("POST"); if (result?.data) { applyRestore(result.data as SavedCrmData); setMessage("Recovery completed. The restored records are now in the CRM."); setConfirm(""); } };
+  return <section className="recovery-workspace"><section className="recovery-hero"><div className="recovery-icon"><RotateCcw size={25}/></div><div><span className="overline">ADMIN-ONLY DATA PROTECTION</span><h2>Recover CRM data from Google Sheets</h2><p>Check the fixed GeeBee backup first. A protected server snapshot of current CRM data is saved immediately before recovery.</p></div></section><section className="panel recovery-card"><div><h3>1. Inspect the latest backup</h3><p>Reads your private Google Sheet without changing any live CRM data.</p></div><button className="outline recovery-preview" type="button" onClick={preview} disabled={loading}>{loading ? "Checking backup…" : "Check Google Sheet backup"}</button></section>{counts && <section className="panel recovery-counts"><div><h3>2. Review backup contents</h3><p>Only continue if these counts are what you expect to restore.</p></div><div className="recovery-count-grid">{Object.entries(counts).map(([tab, count]) => <article key={tab}><b>{count}</b><span>{tab}</span></article>)}</div><label>To replace the current CRM with this backup, type <b>RESTORE GEEBEE</b><input value={confirm} onChange={(event) => setConfirm(event.target.value)} placeholder="RESTORE GEEBEE" autoComplete="off"/></label><button className="primary recovery-restore" type="button" onClick={restore} disabled={loading || confirm !== "RESTORE GEEBEE"}>{loading ? "Restoring safely…" : "Create snapshot and restore backup"}</button></section>}{message && <p className={`recovery-message ${message.includes("completed") || message.includes("checked") ? "success" : "error"}`}>{message}</p>}<p className="recovery-note">Recovery restores business records. Product images stored only in a browser are not included in Google Sheets backups.</p></section>;
+}
+
 function TeamAccess({ members, workspaceOwnerId, canManage, onChange, onAudit, auditEvents }: { members: WorkspaceMember[]; workspaceOwnerId: string | null; canManage: boolean; onChange: (members: WorkspaceMember[]) => void; onAudit: (action: string, module: string, details: string) => void; auditEvents: AuditEvent[] }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"admin" | "employee">("employee");
