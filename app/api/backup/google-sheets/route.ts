@@ -76,6 +76,7 @@ export async function GET(request: Request) {
     await sheets.spreadsheets.values.append({ spreadsheetId, range: "'Backup Log'!A:D", valueInputOption: "RAW", requestBody: { values: [[new Date().toISOString(), "Success", workspace.updated_at, countSummary]] } });
     return Response.json({ ok: true, backupAt: new Date().toISOString(), records: countSummary });
   } catch (error) {
+    console.error("Google Sheets backup failed:", error instanceof Error ? error.message : error);
     return Response.json({ error: error instanceof Error ? error.message : "Google Sheets backup failed." }, { status: 500 });
   }
 }
