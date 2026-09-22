@@ -36,7 +36,8 @@ export async function GET(request: Request) {
   const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!url || !serviceKey || !spreadsheetId || !keyJson) return Response.json({ error: "Backup configuration is incomplete." }, { status: 500 });
   try {
-    const credentials = JSON.parse(keyJson.replace(/\\n/g, "\n"));
+    const credentials = JSON.parse(keyJson);
+    if (typeof credentials.private_key === "string") credentials.private_key = credentials.private_key.replace(/\\n/g, "\n");
     const auth = new google.auth.GoogleAuth({ credentials, scopes: ["https://www.googleapis.com/auth/spreadsheets"] });
     const sheets = google.sheets({ version: "v4", auth });
     const supabase = createClient(url, serviceKey, { auth: { persistSession: false } });
@@ -45,7 +46,9 @@ export async function GET(request: Request) {
       supabase.from("crm_audit_events").select("id, workspace_owner_id, actor_email, action, module, details, created_at").order("created_at", { ascending: false }).limit(500),
     ]);
     if (workspaceError) throw workspaceError;
-    if (auditError) throw auditError;
+    // Audit history is useful, but a backup of core business data must still
+    // succeed if an older database has not created the audit table yet.
+    const safeAuditEvents = auditError ? [] : auditEvents || [];
     const workspace = ((workspaces || [])[0] as Workspace | undefined);
     if (!workspace) throw new Error("No GeeBee workspace was found.");
     const data = workspace.data || {};
@@ -58,7 +61,7 @@ export async function GET(request: Request) {
       Invoices: rows(data.invoices, ["id", "client", "order", "amount", "due", "status"]),
       Leads: rows(data.leads, ["id", "company", "contact", "mobile", "city", "source", "salesperson", "requirement", "expectedValue", "expectedDate", "status", "lostReason", "createdAt"]),
       Tasks: rows(data.tasks, ["id", "title", "time", "dueDate", "assignee", "type", "status", "relatedTo"]),
-      "Audit Log": (auditEvents || []).map((event: any) => [text(event.id), text(event.workspace_owner_id), text(event.actor_email), text(event.action), text(event.module), text(event.details), text(event.created_at)]),
+      "Audit Log": safeAuditEvents.map((event: any) => [text(event.id), text(event.workspace_owner_id), text(event.actor_email), text(event.action), text(event.module), text(event.details), text(event.created_at)]),
     };
     const titles = ["README", "Backup Log", ...Object.keys(headers)];
     await ensureSheets(sheets, spreadsheetId, titles);
@@ -68,6 +71,7 @@ export async function GET(request: Request) {
     }
     await sheets.spreadsheets.values.clear({ spreadsheetId, range: "'README'!A:Z" });
     await sheets.spreadsheets.values.update({ spreadsheetId, range: "'README'!A1", valueInputOption: "RAW", requestBody: { values: [["GeeBee CRM Recovery Backup"], ["Do not rename column headers. Restore imports validate these tabs and columns."], ["Latest backup", new Date().toISOString()], ["Workspace updated at", workspace.updated_at]] } });
+    await sheets.spreadsheets.values.update({ spreadsheetId, range: "'Backup Log'!A1", valueInputOption: "RAW", requestBody: { values: [["Backup timestamp", "Status", "Workspace updated at", "Record counts"]] } });
     const countSummary = Object.entries(backupRows).map(([title, value]) => `${title}: ${value.length}`).join(" | ");
     await sheets.spreadsheets.values.append({ spreadsheetId, range: "'Backup Log'!A:D", valueInputOption: "RAW", requestBody: { values: [[new Date().toISOString(), "Success", workspace.updated_at, countSummary]] } });
     return Response.json({ ok: true, backupAt: new Date().toISOString(), records: countSummary });

@@ -1,0 +1,17 @@
+name: GeeBee Google Sheets Backup
+
+on:
+  schedule:
+    # 05:30 and 17:30 India Standard Time (UTC+05:30)
+    - cron: "0 0,12 * * *"
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run protected CRM backup
+        run: |
+          curl --fail --show-error --retry 3 \
+            --header "Authorization: Bearer ${{ secrets.BACKUP_CRON_SECRET }}" \
+            https://geebee-crm.vercel.app/api/backup/google-sheets
