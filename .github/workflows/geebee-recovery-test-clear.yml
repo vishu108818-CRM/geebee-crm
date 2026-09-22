@@ -1,0 +1,15 @@
+name: GeeBee Recovery Test Clear
+
+on:
+  workflow_dispatch:
+
+jobs:
+  clear:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create protected snapshot and clear CRM records
+        run: |
+          curl --fail --show-error \
+            --header "Authorization: Bearer ${{ secrets.BACKUP_CRON_SECRET }}" \
+            --request POST \
+            https://geebee-crm.vercel.app/api/recovery/test-clear
