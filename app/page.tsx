@@ -1429,13 +1429,21 @@ function OrderModal({ order, clients, catalogue, close, save }: { order: Order |
   const selectClient = (name: string) => { const client = clients.find((item) => item.name === name); setF({ ...f, client: name, city: client?.city || "", avatar: client?.avatar || initials(name) }); setProducts((current) => current.map((item) => ({ ...item, unitPrice: specialRate(name, item.sku) ?? item.unitPrice }))); };
   const selectCatalogueProduct = (index: number, sku: string) => { const product = catalogue.find((item) => item.sku === sku); if (!product) return; setProducts((current) => current.map((item, line) => line === index ? { ...item, product: product.name, sku: product.sku, unitPrice: specialRate(f.client, product.sku) ?? product.unitPrice } : item)); };
   useEffect(() => {
-    const list = document.createElement("datalist"); list.id = "order-catalogue-products";
-    catalogue.forEach((product) => { const option = document.createElement("option"); option.value = product.name; option.label = `${product.sku} · ${money(specialRate(f.client, product.sku) ?? product.unitPrice)}`; list.append(option); });
-    document.body.append(list);
     const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('input[aria-label="Product name"]'));
-    const handlers = inputs.map((input, index) => { input.setAttribute("list", list.id); const handler = () => { const product = catalogue.find((item) => item.name === input.value); if (product) selectCatalogueProduct(index, product.sku); }; input.addEventListener("change", handler); return handler; });
-    return () => { inputs.forEach((input, index) => input.removeEventListener("change", handlers[index])); list.remove(); };
-  }, [catalogue, f.client]);
+    const selectors = inputs.map((input, index) => {
+      const selector = document.createElement("select");
+      selector.className = "order-product-selector";
+      selector.setAttribute("aria-label", "Select catalogue product");
+      selector.append(new Option("Select product from catalogue", ""));
+      catalogue.forEach((product) => selector.append(new Option(`${product.name} · ${product.sku} · ${money(specialRate(f.client, product.sku) ?? product.unitPrice)}`, product.sku)));
+      selector.value = products[index]?.sku || "";
+      selector.onchange = () => selectCatalogueProduct(index, selector.value);
+      input.style.display = "none";
+      input.parentElement?.insertBefore(selector, input);
+      return { input, selector };
+    });
+    return () => selectors.forEach(({ input, selector }) => { input.style.display = ""; selector.remove(); });
+  }, [catalogue, f.client, products]);
   const scanDocument = async (file: File) => {
     setPreview((file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) ? "" : URL.createObjectURL(file)); setScanState("scanning"); setScanNote("Reading document and finding product lines…");
     try {
