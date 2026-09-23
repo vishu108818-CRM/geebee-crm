@@ -563,7 +563,9 @@ export default function Home() {
         </div>
         {section === "Overview" && (
           <Overview
-            orders={shown}
+            orders={orders}
+            clients={clients}
+            invoices={invoices}
             edit={(o) => show("order", o)}
             all={() => setSection("Orders")}
             flash={flash}
@@ -729,43 +731,55 @@ export default function Home() {
 }
 function Overview({
   orders,
+  clients,
+  invoices,
   edit,
   all,
   flash,
 }: {
   orders: Order[];
+  clients: Client[];
+  invoices: Invoice[];
   edit: (o: Order) => void;
   all: () => void;
   flash: (s: string) => void;
 }) {
+  const amount = (value: string) => Number(value.replace(/[^\d.-]/g, "")) || 0;
+  const totalValue = orders.reduce((total, order) => total + orderTotal(order), 0);
+  const paid = invoices.filter((invoice) => invoice.status === "Paid").reduce((total, invoice) => total + amount(invoice.amount), 0);
+  const overdue = invoices.filter((invoice) => invoice.status === "Overdue").reduce((total, invoice) => total + amount(invoice.amount), 0);
+  const pending = invoices.filter((invoice) => invoice.status !== "Paid").reduce((total, invoice) => total + amount(invoice.amount), 0);
+  const collectedPercent = paid + pending ? Math.round((paid / (paid + pending)) * 100) : 0;
+  const activeOrders = orders.filter((order) => order.status !== "Delivered").length;
+  const inTransit = orders.filter((order) => order.status === "In transit").length;
   return (
     <>
       <div className="metrics">
         <Metric
           label="Orders in progress"
-          value="24"
-          change="+4 this week"
+          value={String(activeOrders)}
+          change={`${orders.length} total orders`}
           icon={<PackageCheck />}
           kind="burgundy"
         />
         <Metric
-          label="Expected receivables"
-          value="₹8.42L"
-          change="₹2.16L overdue"
+          label="Order value"
+          value={money(totalValue)}
+          change={`${money(pending)} pending`}
           icon={<CircleDollarSign />}
           kind="coral"
         />
         <Metric
           label="Shipments in transit"
-          value="8"
-          change="Next arrival 18 Sep"
+          value={String(inTransit)}
+          change={inTransit ? "Currently in transit" : "No active transit orders"}
           icon={<ShipWheel />}
           kind="gold"
         />
         <Metric
           label="Active clients"
-          value="126"
-          change="+9 this month"
+          value={String(clients.length)}
+          change={clients.length ? "CRM customers" : "Add your first customer"}
           icon={<Users />}
           kind="violet"
         />
@@ -788,13 +802,13 @@ function Overview({
             <div className="panel-head">
               <div>
                 <h2>Collection health</h2>
-                <p>September, 2026</p>
+              <p>Live invoice status</p>
               </div>
             </div>
             <div className="ring-row">
               <div className="ring">
                 <div>
-                  <b>72%</b>
+                  <b>{collectedPercent}%</b>
                   <small>Collected</small>
                 </div>
               </div>
@@ -802,19 +816,19 @@ function Overview({
                 <div>
                   <span className="dot paid" />
                   <p>
-                    Collected <b>₹6.12L</b>
+                    Collected <b>{money(paid)}</b>
                   </p>
                 </div>
                 <div>
                   <span className="dot pending" />
                   <p>
-                    Pending <b>₹2.30L</b>
+                    Pending <b>{money(pending)}</b>
                   </p>
                 </div>
                 <div>
                   <span className="dot late" />
                   <p>
-                    Overdue <b>₹1.48L</b>
+                    Overdue <b>{money(overdue)}</b>
                   </p>
                 </div>
               </div>
@@ -830,31 +844,15 @@ function Overview({
             <div className="panel-head">
               <h2>Activity</h2>
             </div>
-            {[
-              [
-                "Payment received",
-                "Happy Times Retail cleared INV-1018",
-                "₹48,225 · 12 min ago",
-              ],
-              [
-                "Shipment updated",
-                "GB-24091 departed Ningbo port",
-                "45 min ago",
-              ],
-              [
-                "Invoice due tomorrow",
-                "The Party Store · ₹1,31,600 pending",
-                "2 hr ago",
-              ],
-            ].map(([t, d, time]) => (
-              <div className="activity-item" key={t}>
+            {orders.slice(0, 3).map((order) => (
+              <div className="activity-item" key={order.id}>
                 <div className="activity-icon money">
                   <CircleDollarSign size={16} />
                 </div>
                 <div>
-                  <b>{t}</b>
-                  <p>{d}</p>
-                  <small>{time}</small>
+                  <b>Order {order.id} · {order.status}</b>
+                  <p>{order.client} · {money(orderTotal(order))}</p>
+                  <small>{order.payment} payment status</small>
                 </div>
               </div>
             ))}
