@@ -471,6 +471,7 @@ export default function Home() {
     ...auditEvents.slice(0, 4).map((event) => ({ title: event.action, detail: `${event.actor_email} · ${event.module}`, time: new Date(event.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }) })),
     ...invoices.filter((invoice) => invoice.status !== "Paid").slice(0, 2).map((invoice) => ({ title: `${invoice.status} invoice ${invoice.id}`, detail: `${invoice.client} · ${invoice.amount} due ${invoice.due}`, time: "Needs attention" })),
   ].slice(0, 6);
+  const liveSections = new Set(["Overview", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Orders", "Backorders", "Invoices", "Catalogue", "Notifications", "Sales Team Report", "Sales Report", "Customer Report", "Product Report", "Inventory Report", "Payment Report", "Settings", "Recovery"]);
   if (!authReady) return <div className="auth-screen"><div className="auth-card"><b>Opening secure workspace…</b></div></div>;
   if (!supabase) return <div className="auth-screen"><div className="auth-card"><span className="overline">GEEBEE CRM</span><h1>Cloud connection needed</h1><p>Add the Supabase environment settings to open this private workspace.</p></div></div>;
   if (!session) return <SignInScreen notice={accessNotice} />;
@@ -491,7 +492,7 @@ export default function Home() {
         </div>
         <nav>
           {navigationGroups.map((group) => {
-            const permitted = group.items.filter((item) => !item.module || isAdmin || allowedModules.includes(item.module));
+            const permitted = group.items.filter((item) => liveSections.has(item.section) && (!item.module || isAdmin || allowedModules.includes(item.module)));
             if (!permitted.length) return null;
             const Icon = group.icon;
             const active = permitted.some((item) => section === item.section);
@@ -1461,6 +1462,14 @@ function CataloguePanel({ items, edit, addDrafts, remove }: { items: CatalogueIt
   const [notice, setNotice] = useState("");
   const [selected, setSelected] = useState<number[]>([]);
   const toggleSelected = (id: number) => setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  const toggleAll = () => setSelected((current) => current.length === items.length ? [] : items.map((item) => item.id));
+  useEffect(() => {
+    const toolbar = document.querySelector(".catalogue-toolbar-actions");
+    if (!toolbar) return;
+    const button = document.createElement("button"); button.type = "button"; button.className = "bulk-delete"; button.textContent = selected.length === items.length && items.length ? "Clear selection" : `Select all ${items.length} products`;
+    button.onclick = toggleAll; toolbar.prepend(button);
+    return () => button.remove();
+  }, [items, selected]);
   const removeSelected = () => {
     if (!selected.length || !window.confirm(`Remove ${selected.length} selected product${selected.length === 1 ? "" : "s"} from the catalogue?`)) return;
     remove(selected); setSelected([]);
