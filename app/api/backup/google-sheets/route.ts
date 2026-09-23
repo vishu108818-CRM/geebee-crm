@@ -41,9 +41,16 @@ export async function GET(request: Request) {
     const auth = new google.auth.GoogleAuth({ credentials, scopes: ["https://www.googleapis.com/auth/spreadsheets"] });
     const sheets = google.sheets({ version: "v4", auth });
     const supabase = createClient(url, serviceKey, { auth: { persistSession: false } });
-    const [{ data: workspaces, error: workspaceError }, { data: auditEvents, error: auditError }] = await Promise.all([
+    const [{ data: workspaces, error: workspaceError }, { data: auditEvents, error: auditError }, ...recordResults] = await Promise.all([
       supabase.from("crm_workspaces").select("owner_id, data, updated_at"),
       supabase.from("crm_audit_events").select("id, workspace_owner_id, actor_email, action, module, details, created_at").order("created_at", { ascending: false }).limit(500),
+      supabase.from("crm_clients").select("data").limit(100000),
+      supabase.from("crm_products").select("data").limit(100000),
+      supabase.from("crm_orders").select("data").limit(100000),
+      supabase.from("crm_invoices").select("data").limit(100000),
+      supabase.from("crm_leads").select("data").limit(100000),
+      supabase.from("crm_quotes").select("data").limit(100000),
+      supabase.from("crm_tasks").select("data").limit(100000),
     ]);
     if (workspaceError) throw workspaceError;
     // Audit history is useful, but a backup of core business data must still
@@ -51,7 +58,9 @@ export async function GET(request: Request) {
     const safeAuditEvents = auditError ? [] : auditEvents || [];
     const workspace = ((workspaces || [])[0] as Workspace | undefined);
     if (!workspace) throw new Error("No GeeBee workspace was found.");
-    const data = workspace.data || {};
+    const normalizedReady = recordResults.every((result) => !result.error);
+    const normalized = normalizedReady ? recordResults.map((result) => (result.data || []).map((row: any) => row.data)) : [];
+    const data = normalizedReady ? { clients: normalized[0], catalogue: normalized[1], orders: normalized[2], invoices: normalized[3], leads: normalized[4], quotes: normalized[5], tasks: normalized[6] } : workspace.data || {};
     const backupRows: Record<string, string[][]> = {
       Customers: rows(data.clients, ["id", "customerId", "name", "contact", "phone", "whatsapp", "email", "gstin", "pan", "businessType", "customerCategory", "state", "city", "address", "pincode", "credit", "paymentTerms", "assignedSalesperson", "customerStatus", "specialRates"]),
       Products: rows(data.catalogue, ["id", "sku", "name", "category", "subCategory", "brand", "description", "cartonQty", "unit", "packSize", "moq", "purchasePrice", "unitPrice", "wholesalePrice", "distributorPrice", "gst", "barcode", "weight", "dimensions", "supplier", "countryOfOrigin", "openingStock", "purchasedStock", "orderedStock", "damagedStock", "reservedStock"]),

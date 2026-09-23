@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./product-lines.css";
 import "./catalogue.css";
 import "./catalogue-v2.css";
@@ -103,6 +103,16 @@ type LeadStage = "New" | "Contacted" | "Requirement Received" | "Quotation Sent"
 type Lead = { id: string; company: string; contact: string; mobile: string; city: string; source: string; salesperson: string; requirement: string; expectedValue: string; expectedDate: string; status: LeadStage; lostReason?: string; createdAt: string };
 type Quote = { id: string; customer: string; products: QuoteProduct[]; gst: number; freight: number; validity: string; paymentTerms: string; deliveryTerms: string; status: "Draft" | "Sent" | "Accepted" | "Converted"; createdAt: string };
 type SalesTask = { id: string; title: string; time: string; dueDate: string; assignee: string; type: "Call" | "Follow-up" | "Payment" | "Quotation" | "Enquiry" | "Other"; status: "Open" | "Done"; relatedTo?: string };
+type ScalableRecord = { record_id: string; data: unknown };
+const scalableTables = [
+  { key: "clients", table: "crm_clients", search: (item: Client) => `${item.customerId || ""} ${item.name} ${item.contact} ${item.phone} ${item.city}` },
+  { key: "catalogue", table: "crm_products", search: (item: CatalogueItem) => `${item.sku} ${item.name} ${item.category} ${item.brand || ""}` },
+  { key: "orders", table: "crm_orders", search: (item: Order) => `${item.id} ${item.client} ${item.product} ${item.sku} ${item.city}` },
+  { key: "invoices", table: "crm_invoices", search: (item: Invoice) => `${item.id} ${item.client} ${item.order} ${item.status}` },
+  { key: "leads", table: "crm_leads", search: (item: Lead) => `${item.id} ${item.company} ${item.contact} ${item.mobile} ${item.city}` },
+  { key: "quotes", table: "crm_quotes", search: (item: Quote) => `${item.id} ${item.customer} ${item.status}` },
+  { key: "tasks", table: "crm_tasks", search: (item: SalesTask) => `${item.id} ${item.title} ${item.assignee} ${item.relatedTo || ""}` },
+] as const;
 const seedOrders: Order[] = [
   {
     id: "GB-24091",
@@ -361,6 +371,7 @@ export default function Home() {
     [modal, setModal] = useState<"order" | "client" | "invoice" | "catalogue" | "lead" | "quote" | "task" | null>(null),
     [editing, setEditing] = useState<any>(null),
     [toast, setToast] = useState("");
+  const recordSnapshots = useRef<Record<string, Map<string, string>>>({});
   const flash = (m: string) => {
       setToast(m);
       setTimeout(() => setToast(""), 2600);
@@ -409,30 +420,44 @@ export default function Home() {
     const cloud = supabase;
     if (!cloud || !authReady || !session || !storageReady || !workspaceOwnerId) return;
     let cancelled = false;
-    const loadCloudWorkspace = async () => {
-      const { data: row, error } = await cloud.from("crm_workspaces").select("data").eq("owner_id", workspaceOwnerId).maybeSingle();
+    const loadScalableRecords = async () => {
+      // The workspace row remains only as the access-control anchor. Business
+      // records now live in their own tables and can grow independently.
+      const { error: workspaceError } = await cloud.from("crm_workspaces").upsert({ owner_id: workspaceOwnerId, data: { normalizedRecords: true }, updated_at: new Date().toISOString() });
+      if (workspaceError || cancelled) { if (!cancelled) setCloudError("Cloud workspace is not ready yet. Please run the latest Supabase setup script."); return; }
+      const results = await Promise.all(scalableTables.map(({ table }) => cloud.from(table).select("record_id, data").eq("workspace_owner_id", workspaceOwnerId).order("updated_at", { ascending: false }).limit(50000)));
       if (cancelled) return;
-      if (error) { setCloudError("Cloud workspace is not ready yet. Please run the supplied Supabase setup script."); return; }
-      const current = { orders, clients, invoices, catalogue, leads, quotes, tasks };
-      if (row?.data) {
-        const saved = row.data as Partial<SavedCrmData>;
-        setOrders(Array.isArray(saved.orders) ? saved.orders : current.orders); setClients(Array.isArray(saved.clients) ? saved.clients : current.clients); setInvoices(Array.isArray(saved.invoices) ? saved.invoices : current.invoices); setCatalogue(Array.isArray(saved.catalogue) ? saved.catalogue : current.catalogue); setLeads(Array.isArray(saved.leads) ? saved.leads : current.leads); setQuotes(Array.isArray(saved.quotes) ? saved.quotes : current.quotes); setTasks(Array.isArray(saved.tasks) ? saved.tasks : current.tasks);
-      } else {
-        const { error: createError } = await cloud.from("crm_workspaces").upsert({ owner_id: workspaceOwnerId, data: current, updated_at: new Date().toISOString() });
-        if (createError) { setCloudError("Cloud workspace is not ready yet. Please run the supplied Supabase setup script."); return; }
-      }
+      const failed = results.find((result) => result.error);
+      if (failed?.error) { setCloudError("Database upgrade required: run the latest scalable CRM SQL script in Supabase, then refresh this page."); return; }
+      const records = Object.fromEntries(scalableTables.map((config, index) => [config.key, (results[index].data || []) as ScalableRecord[]])) as Record<string, ScalableRecord[]>;
+      const toItems = <T,>(key: string) => records[key].map((row) => row.data as T);
+      if (records.clients.length || records.catalogue.length || records.orders.length || records.invoices.length || records.leads.length || records.quotes.length || records.tasks.length) {
+        setClients(toItems<Client>("clients")); setCatalogue(toItems<CatalogueItem>("catalogue")); setOrders(toItems<Order>("orders")); setInvoices(toItems<Invoice>("invoices")); setLeads(toItems<Lead>("leads")); setQuotes(toItems<Quote>("quotes")); setTasks(toItems<SalesTask>("tasks"));
+        recordSnapshots.current = Object.fromEntries(scalableTables.map((config) => [config.table, new Map(records[config.key].map((row) => [row.record_id, JSON.stringify(row.data)]))]));
+      } else recordSnapshots.current = {};
       setCloudError(""); setCloudReady(true);
     };
-    loadCloudWorkspace();
+    loadScalableRecords();
     return () => { cancelled = true; };
   }, [authReady, session, storageReady, workspaceOwnerId]);
   useEffect(() => {
     const cloud = supabase;
     if (!cloud || !session || !cloudReady || !workspaceOwnerId) return;
-    const saveTimer = window.setTimeout(() => {
-      cloud.from("crm_workspaces").update({ data: { orders, clients, invoices, catalogue, leads, quotes, tasks }, updated_at: new Date().toISOString() }).eq("owner_id", workspaceOwnerId).then(({ error }) => { if (error) setCloudError("A change could not be saved to the cloud. Your local copy is still safe."); });
+    const collections: Array<{ table: string; items: any[]; search: (item: any) => string }> = [
+      { table: "crm_clients", items: clients, search: scalableTables[0].search }, { table: "crm_products", items: catalogue, search: scalableTables[1].search }, { table: "crm_orders", items: orders, search: scalableTables[2].search }, { table: "crm_invoices", items: invoices, search: scalableTables[3].search }, { table: "crm_leads", items: leads, search: scalableTables[4].search }, { table: "crm_quotes", items: quotes, search: scalableTables[5].search }, { table: "crm_tasks", items: tasks, search: scalableTables[6].search },
+    ];
+    const syncTimer = window.setTimeout(async () => {
+      for (const { table, items, search } of collections) {
+        const previous = recordSnapshots.current[table] || new Map<string, string>();
+        const next = new Map(items.map((item) => [String(item.id), JSON.stringify(item)]));
+        const changed = items.filter((item) => previous.get(String(item.id)) !== JSON.stringify(item)).map((item) => ({ workspace_owner_id: workspaceOwnerId, record_id: String(item.id), search_key: search(item).toLowerCase(), data: item, updated_at: new Date().toISOString() }));
+        const removed = [...previous.keys()].filter((id) => !next.has(id));
+        if (changed.length) { const { error } = await cloud.from(table).upsert(changed, { onConflict: "workspace_owner_id,record_id" }); if (error) { setCloudError("A change could not be saved to the cloud. Your local copy is still safe."); return; } }
+        if (removed.length) { const { error } = await cloud.from(table).delete().eq("workspace_owner_id", workspaceOwnerId).in("record_id", removed); if (error) { setCloudError("A deleted record could not be synced to the cloud."); return; } }
+        recordSnapshots.current[table] = next;
+      }
     }, 650);
-    return () => window.clearTimeout(saveTimer);
+    return () => window.clearTimeout(syncTimer);
   }, [orders, clients, invoices, catalogue, leads, quotes, tasks, session, cloudReady, workspaceOwnerId]);
   useEffect(() => {
     const cloud = supabase;

@@ -72,6 +72,40 @@ function restoreData(rows: Record<Tab, Row[]>) {
   return { clients, catalogue, orders, quotes, invoices, leads, tasks };
 }
 
+const scalableTables = [
+  ["clients", "crm_clients"], ["catalogue", "crm_products"], ["orders", "crm_orders"], ["invoices", "crm_invoices"], ["leads", "crm_leads"], ["quotes", "crm_quotes"], ["tasks", "crm_tasks"],
+] as const;
+
+async function readLiveData(db: any, ownerId: string) {
+  const results = await Promise.all(scalableTables.map(([, table]) => db.from(table).select("data").eq("workspace_owner_id", ownerId).limit(100000)));
+  if (results.every((result: any) => !result.error)) {
+    const data = Object.fromEntries(scalableTables.map(([key], index) => [key, (results[index].data || []).map((row: any) => row.data)]));
+    return { data, normalized: true };
+  }
+  const { data, error } = await db.from("crm_workspaces").select("data").eq("owner_id", ownerId).single();
+  if (error || !data) throw new Error("The live workspace could not be protected before recovery.");
+  return { data: data.data, normalized: false };
+}
+
+async function writeLiveData(db: any, ownerId: string, data: Record<string, any>) {
+  const probes = await Promise.all(scalableTables.map(([, table]) => db.from(table).select("record_id").eq("workspace_owner_id", ownerId).limit(1)));
+  if (!probes.every((result: any) => !result.error)) {
+    const { error } = await db.from("crm_workspaces").update({ data, updated_at: new Date().toISOString() }).eq("owner_id", ownerId);
+    if (error) throw error;
+    return;
+  }
+  for (const [key, table] of scalableTables) {
+    const { error: deleteError } = await db.from(table).delete().eq("workspace_owner_id", ownerId);
+    if (deleteError) throw deleteError;
+    const items = Array.isArray(data[key]) ? data[key] : [];
+    if (!items.length) continue;
+    const { error: insertError } = await db.from(table).upsert(items.map((item: any) => ({ workspace_owner_id: ownerId, record_id: String(item.id), search_key: JSON.stringify(item).toLowerCase(), data: item, updated_at: new Date().toISOString() })), { onConflict: "workspace_owner_id,record_id" });
+    if (insertError) throw insertError;
+  }
+  const { error: anchorError } = await db.from("crm_workspaces").update({ data: { normalizedRecords: true }, updated_at: new Date().toISOString() }).eq("owner_id", ownerId);
+  if (anchorError) throw anchorError;
+}
+
 export async function GET(request: Request) {
   try {
     const { db, ownerId } = await context(request);
@@ -87,22 +121,19 @@ export async function POST(request: Request) {
     const { confirm, snapshotId } = await request.json();
     if (confirm !== "RESTORE GEEBEE") return Response.json({ error: "Type RESTORE GEEBEE exactly to approve this recovery." }, { status: 400 });
     const { db, ownerId, email } = await context(request);
-    const { data: current, error: currentError } = await db.from("crm_workspaces").select("data").eq("owner_id", ownerId).single();
-    if (currentError || !current) throw new Error("The live workspace could not be protected before recovery.");
+    const current = await readLiveData(db, ownerId);
     const { error: snapshotError } = await db.from("crm_recovery_snapshots").insert({ workspace_owner_id: ownerId, restored_by: email, data: current.data });
     if (snapshotError) throw new Error("Recovery snapshot storage is not ready. Run the latest Supabase schema before restoring.");
     if (snapshotId) {
       const { data: snapshot, error: snapshotReadError } = await db.from("crm_recovery_snapshots").select("data").eq("workspace_owner_id", ownerId).eq("id", snapshotId).single();
       if (snapshotReadError || !snapshot) throw new Error("That recovery snapshot is no longer available.");
-      const { error: undoError } = await db.from("crm_workspaces").update({ data: snapshot.data, updated_at: new Date().toISOString() }).eq("owner_id", ownerId);
-      if (undoError) throw undoError;
+      await writeLiveData(db, ownerId, snapshot.data);
       await db.from("crm_audit_events").insert({ workspace_owner_id: ownerId, actor_email: email, action: "Restored pre-recovery snapshot", module: "Data recovery", details: `Snapshot ${snapshotId}` });
       return Response.json({ ok: true, data: snapshot.data });
     }
     const backup = await readBackup();
     const restored = restoreData(backup.rows);
-    const { error: updateError } = await db.from("crm_workspaces").update({ data: restored, updated_at: new Date().toISOString() }).eq("owner_id", ownerId);
-    if (updateError) throw updateError;
+    await writeLiveData(db, ownerId, restored);
     await db.from("crm_audit_events").insert({ workspace_owner_id: ownerId, actor_email: email, action: "Restored Google Sheets backup", module: "Data recovery", details: Object.entries(backup.counts).map(([tab, count]) => `${tab}: ${count}`).join(" | ") });
     return Response.json({ ok: true, data: restored, counts: backup.counts });
   } catch (error) { console.error("Google Sheets recovery failed:", error instanceof Error ? error.message : error); return Response.json({ error: error instanceof Error ? error.message : "Could not restore the CRM." }, { status: 400 }); }

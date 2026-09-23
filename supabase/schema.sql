@@ -110,3 +110,41 @@ for insert to authenticated with check (bucket_id = 'catalogue-imports');
 drop policy if exists "Authenticated users read catalogue PDFs" on storage.objects;
 create policy "Authenticated users read catalogue PDFs" on storage.objects
 for select to authenticated using (bucket_id = 'catalogue-imports');
+
+-- Scalable CRM records. Each business record is stored independently so an
+-- edit to one order never rewrites the full CRM workspace.
+create table if not exists public.crm_clients (
+  id bigint generated always as identity primary key,
+  workspace_owner_id uuid not null references public.crm_workspaces(owner_id) on delete cascade,
+  record_id text not null,
+  search_key text not null default '',
+  data jsonb not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (workspace_owner_id, record_id)
+);
+
+create table if not exists public.crm_products (like public.crm_clients including all);
+create table if not exists public.crm_orders (like public.crm_clients including all);
+create table if not exists public.crm_invoices (like public.crm_clients including all);
+create table if not exists public.crm_leads (like public.crm_clients including all);
+create table if not exists public.crm_quotes (like public.crm_clients including all);
+create table if not exists public.crm_tasks (like public.crm_clients including all);
+
+create index if not exists crm_clients_owner_search_idx on public.crm_clients (workspace_owner_id, search_key);
+create index if not exists crm_products_owner_search_idx on public.crm_products (workspace_owner_id, search_key);
+create index if not exists crm_orders_owner_search_idx on public.crm_orders (workspace_owner_id, search_key);
+create index if not exists crm_invoices_owner_search_idx on public.crm_invoices (workspace_owner_id, search_key);
+create index if not exists crm_leads_owner_search_idx on public.crm_leads (workspace_owner_id, search_key);
+create index if not exists crm_quotes_owner_search_idx on public.crm_quotes (workspace_owner_id, search_key);
+create index if not exists crm_tasks_owner_search_idx on public.crm_tasks (workspace_owner_id, search_key);
+
+do $$
+declare table_name text;
+begin
+  foreach table_name in array array['crm_clients', 'crm_products', 'crm_orders', 'crm_invoices', 'crm_leads', 'crm_quotes', 'crm_tasks'] loop
+    execute format('alter table public.%I enable row level security', table_name);
+    execute format('drop policy if exists "Workspace members use scalable CRM records" on public.%I', table_name);
+    execute format('create policy "Workspace members use scalable CRM records" on public.%I for all to authenticated using (workspace_owner_id = auth.uid() or exists (select 1 from public.crm_workspace_members m where m.workspace_owner_id = %I.workspace_owner_id and lower(m.email) = lower(coalesce(auth.jwt() ->> ''email'', '''')))) with check (workspace_owner_id = auth.uid() or exists (select 1 from public.crm_workspace_members m where m.workspace_owner_id = %I.workspace_owner_id and lower(m.email) = lower(coalesce(auth.jwt() ->> ''email'', ''''))))', table_name, table_name, table_name);
+  end loop;
+end $$;
