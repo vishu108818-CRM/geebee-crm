@@ -479,7 +479,7 @@ export default function Home() {
     <main>
       <aside className="sidebar">
         <div className="brand">
-          <img className="brand-logo" src="/brand/geebee-logo.png" alt="GeeBee — The Party Factory" />
+          <img className="brand-logo" src="/brand/geebee-logo-transparent.png" alt="GeeBee — The Party Factory" />
         </div>
         <div className="workspace">
           <div className="workspace-icon">G</div>
