@@ -14,7 +14,7 @@ export async function POST(request: Request) {
     if (workspaceError || !workspaces?.length) throw new Error("No GeeBee workspace was found.");
     if (workspaces.length !== 1) throw new Error("Recovery test requires exactly one workspace.");
     const workspace = workspaces[0];
-    const tables = [["clients", "crm_clients"], ["catalogue", "crm_products"], ["orders", "crm_orders"], ["invoices", "crm_invoices"], ["leads", "crm_leads"], ["quotes", "crm_quotes"], ["tasks", "crm_tasks"]] as const;
+    const tables = [["clients", "crm_clients"], ["catalogue", "crm_products"], ["orders", "crm_orders"], ["invoices", "crm_invoices"], ["leads", "crm_leads"], ["quotes", "crm_quotes"], ["tasks", "crm_tasks"], ["transporters", "crm_transporters"]] as const;
     const reads = await Promise.all(tables.map(([, table]) => db.from(table).select("data").eq("workspace_owner_id", workspace.owner_id).limit(100000)));
     const normalizedReady = reads.every((result) => !result.error);
     const snapshotData = normalizedReady ? Object.fromEntries(tables.map(([key], index) => [key, (reads[index].data || []).map((row: any) => row.data)])) : workspace.data;

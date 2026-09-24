@@ -3,7 +3,7 @@ import { google } from "googleapis";
 
 export const runtime = "nodejs";
 
-const sheetTabs = ["Customers", "Products", "Orders", "Backorders", "Quotes", "Invoices", "Leads", "Tasks"] as const;
+const sheetTabs = ["Customers", "Products", "Orders", "Backorders", "Quotes", "Invoices", "Leads", "Tasks", "Transporters"] as const;
 type Tab = typeof sheetTabs[number];
 type Row = Record<string, string>;
 
@@ -50,6 +50,7 @@ async function readBackup() {
   sheetTabs.forEach((tab, index) => {
     const data = values[index]?.values || [];
     const header = (data[0] || []).map(String);
+    if (!header.length && tab === "Transporters") { headers[tab] = []; rows[tab] = []; counts[tab] = 0; return; }
     if (!header.length) throw new Error(`The ${tab} tab is missing or empty. Use a GeeBee backup sheet.`);
     headers[tab] = header;
     rows[tab] = data.slice(1).filter((line) => line.some((value: unknown) => String(value).trim())).map((line) => Object.fromEntries(header.map((name, column) => [name, String(line[column] ?? "")]))) as Row[];
@@ -69,11 +70,12 @@ function restoreData(rows: Record<Tab, Row[]>) {
   const invoices = rows.Invoices.map((row) => ({ id: row["Invoice Number"], client: row.Customer, order: row.Order, amount: row.Amount, due: row.Due, status: row.Status }));
   const leads = rows.Leads.map((row) => ({ id: row["Lead ID"], company: row.Company, contact: row["Contact Person"], mobile: row.Mobile, city: row.City, source: row.Source, salesperson: row["Assigned Salesperson"], requirement: row.Requirement, expectedValue: row["Expected Order Value"], expectedDate: row["Expected Order Date"], status: row.Status || "New", lostReason: row["Lost Reason"], createdAt: row["Created At"] }));
   const tasks = rows.Tasks.map((row) => ({ id: row["Task ID"], title: row.Title, time: row.Time, dueDate: row["Due Date"], assignee: row.Assignee, type: row.Type || "Other", status: row.Status || "Open", relatedTo: row["Related To"] }));
-  return { clients, catalogue, orders, quotes, invoices, leads, tasks };
+  const transporters = rows.Transporters.map((row, index) => ({ id: number(row["Record ID"]) || Date.now() + 2000 + index, name: row["Transporter Name"], contact: row["Contact Person"], phone: row.Phone, email: row.Email, city: row.City, gstin: row.GSTIN, serviceType: row["Service Type"], notes: row.Notes }));
+  return { clients, catalogue, orders, quotes, invoices, leads, tasks, transporters };
 }
 
 const scalableTables = [
-  ["clients", "crm_clients"], ["catalogue", "crm_products"], ["orders", "crm_orders"], ["invoices", "crm_invoices"], ["leads", "crm_leads"], ["quotes", "crm_quotes"], ["tasks", "crm_tasks"],
+  ["clients", "crm_clients"], ["catalogue", "crm_products"], ["orders", "crm_orders"], ["invoices", "crm_invoices"], ["leads", "crm_leads"], ["quotes", "crm_quotes"], ["tasks", "crm_tasks"], ["transporters", "crm_transporters"],
 ] as const;
 
 async function readLiveData(db: any, ownerId: string) {

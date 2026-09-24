@@ -14,6 +14,7 @@ const headers = {
   Invoices: ["Invoice Number", "Customer", "Order", "Amount", "Due", "Status"],
   Leads: ["Lead ID", "Company", "Contact Person", "Mobile", "City", "Source", "Assigned Salesperson", "Requirement", "Expected Order Value", "Expected Order Date", "Status", "Lost Reason", "Created At"],
   Tasks: ["Task ID", "Title", "Time", "Due Date", "Assignee", "Type", "Status", "Related To"],
+  Transporters: ["Record ID", "Transporter Name", "Contact Person", "Phone", "Email", "City", "GSTIN", "Service Type", "Notes"],
   "Audit Log": ["Event ID", "Workspace Owner", "Actor", "Action", "Module", "Details", "Created At"],
 };
 
@@ -51,6 +52,7 @@ export async function GET(request: Request) {
       supabase.from("crm_leads").select("data").limit(100000),
       supabase.from("crm_quotes").select("data").limit(100000),
       supabase.from("crm_tasks").select("data").limit(100000),
+      supabase.from("crm_transporters").select("data").limit(100000),
     ]);
     if (workspaceError) throw workspaceError;
     // Audit history is useful, but a backup of core business data must still
@@ -60,7 +62,7 @@ export async function GET(request: Request) {
     if (!workspace) throw new Error("No GeeBee workspace was found.");
     const normalizedReady = recordResults.every((result) => !result.error);
     const normalized = normalizedReady ? recordResults.map((result) => (result.data || []).map((row: any) => row.data)) : [];
-    const data = normalizedReady ? { clients: normalized[0], catalogue: normalized[1], orders: normalized[2], invoices: normalized[3], leads: normalized[4], quotes: normalized[5], tasks: normalized[6] } : workspace.data || {};
+    const data = normalizedReady ? { clients: normalized[0], catalogue: normalized[1], orders: normalized[2], invoices: normalized[3], leads: normalized[4], quotes: normalized[5], tasks: normalized[6], transporters: normalized[7] } : workspace.data || {};
     const backupRows: Record<string, string[][]> = {
       Customers: rows(data.clients, ["id", "customerId", "name", "contact", "phone", "whatsapp", "email", "gstin", "pan", "businessType", "customerCategory", "state", "city", "address", "pincode", "credit", "paymentTerms", "assignedSalesperson", "customerStatus", "specialRates"]),
       Products: rows(data.catalogue, ["id", "sku", "name", "category", "subCategory", "brand", "description", "cartonQty", "unit", "packSize", "moq", "purchasePrice", "unitPrice", "wholesalePrice", "distributorPrice", "gst", "barcode", "weight", "dimensions", "supplier", "countryOfOrigin", "openingStock", "purchasedStock", "orderedStock", "damagedStock", "reservedStock"]),
@@ -70,6 +72,7 @@ export async function GET(request: Request) {
       Invoices: rows(data.invoices, ["id", "client", "order", "amount", "due", "status"]),
       Leads: rows(data.leads, ["id", "company", "contact", "mobile", "city", "source", "salesperson", "requirement", "expectedValue", "expectedDate", "status", "lostReason", "createdAt"]),
       Tasks: rows(data.tasks, ["id", "title", "time", "dueDate", "assignee", "type", "status", "relatedTo"]),
+      Transporters: rows(data.transporters, ["id", "name", "contact", "phone", "email", "city", "gstin", "serviceType", "notes"]),
       "Audit Log": safeAuditEvents.map((event: any) => [text(event.id), text(event.workspace_owner_id), text(event.actor_email), text(event.action), text(event.module), text(event.details), text(event.created_at)]),
     };
     const titles = ["README", "Backup Log", ...Object.keys(headers)];

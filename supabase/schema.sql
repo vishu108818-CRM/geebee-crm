@@ -130,6 +130,7 @@ create table if not exists public.crm_invoices (like public.crm_clients includin
 create table if not exists public.crm_leads (like public.crm_clients including all);
 create table if not exists public.crm_quotes (like public.crm_clients including all);
 create table if not exists public.crm_tasks (like public.crm_clients including all);
+create table if not exists public.crm_transporters (like public.crm_clients including all);
 
 create index if not exists crm_clients_owner_search_idx on public.crm_clients (workspace_owner_id, search_key);
 create index if not exists crm_products_owner_search_idx on public.crm_products (workspace_owner_id, search_key);
@@ -138,11 +139,12 @@ create index if not exists crm_invoices_owner_search_idx on public.crm_invoices 
 create index if not exists crm_leads_owner_search_idx on public.crm_leads (workspace_owner_id, search_key);
 create index if not exists crm_quotes_owner_search_idx on public.crm_quotes (workspace_owner_id, search_key);
 create index if not exists crm_tasks_owner_search_idx on public.crm_tasks (workspace_owner_id, search_key);
+create index if not exists crm_transporters_owner_search_idx on public.crm_transporters (workspace_owner_id, search_key);
 
 do $$
 declare table_name text;
 begin
-  foreach table_name in array array['crm_clients', 'crm_products', 'crm_orders', 'crm_invoices', 'crm_leads', 'crm_quotes', 'crm_tasks'] loop
+  foreach table_name in array array['crm_clients', 'crm_products', 'crm_orders', 'crm_invoices', 'crm_leads', 'crm_quotes', 'crm_tasks', 'crm_transporters'] loop
     execute format('alter table public.%I enable row level security', table_name);
     execute format('drop policy if exists "Workspace members use scalable CRM records" on public.%I', table_name);
     execute format('create policy "Workspace members use scalable CRM records" on public.%I for all to authenticated using (workspace_owner_id = auth.uid() or exists (select 1 from public.crm_workspace_members m where m.workspace_owner_id = %I.workspace_owner_id and lower(m.email) = lower(coalesce(auth.jwt() ->> ''email'', '''')))) with check (workspace_owner_id = auth.uid() or exists (select 1 from public.crm_workspace_members m where m.workspace_owner_id = %I.workspace_owner_id and lower(m.email) = lower(coalesce(auth.jwt() ->> ''email'', ''''))))', table_name, table_name, table_name);

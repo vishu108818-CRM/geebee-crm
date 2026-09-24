@@ -15,6 +15,7 @@ import "./automation.css";
 import "./tasks.css";
 import "./reports.css";
 import "./recovery.css";
+import "./transporters.css";
 import { supabase } from "./lib/supabase";
 import type { Session } from "@supabase/supabase-js";
 import {
@@ -65,6 +66,7 @@ type Order = {
   eta: string;
   status: string;
   payment: string;
+  transporter?: string;
   avatar: string;
   products?: ProductLine[];
   backorders?: ProductLine[];
@@ -104,6 +106,7 @@ type LeadStage = "New" | "Contacted" | "Requirement Received" | "Quotation Sent"
 type Lead = { id: string; company: string; contact: string; mobile: string; city: string; source: string; salesperson: string; requirement: string; expectedValue: string; expectedDate: string; status: LeadStage; lostReason?: string; createdAt: string };
 type Quote = { id: string; customer: string; products: QuoteProduct[]; gst: number; freight: number; validity: string; paymentTerms: string; deliveryTerms: string; status: "Draft" | "Sent" | "Accepted" | "Converted"; createdAt: string };
 type SalesTask = { id: string; title: string; time: string; dueDate: string; assignee: string; type: "Call" | "Follow-up" | "Payment" | "Quotation" | "Enquiry" | "Other"; status: "Open" | "Done"; relatedTo?: string };
+type Transporter = { id: number; name: string; contact: string; phone: string; email?: string; city?: string; gstin?: string; serviceType?: string; notes?: string };
 type ScalableRecord = { record_id: string; data: unknown };
 const scalableTables = [
   { key: "clients", table: "crm_clients", search: (item: Client) => `${item.customerId || ""} ${item.name} ${item.contact} ${item.phone} ${item.city}` },
@@ -113,6 +116,7 @@ const scalableTables = [
   { key: "leads", table: "crm_leads", search: (item: Lead) => `${item.id} ${item.company} ${item.contact} ${item.mobile} ${item.city}` },
   { key: "quotes", table: "crm_quotes", search: (item: Quote) => `${item.id} ${item.customer} ${item.status}` },
   { key: "tasks", table: "crm_tasks", search: (item: SalesTask) => `${item.id} ${item.title} ${item.assignee} ${item.relatedTo || ""}` },
+  { key: "transporters", table: "crm_transporters", search: (item: Transporter) => `${item.name} ${item.contact} ${item.phone} ${item.city || ""} ${item.serviceType || ""}` },
 ] as const;
 const seedOrders: Order[] = [
   {
@@ -253,6 +257,7 @@ const seedTasks: SalesTask[] = [
   { id: "TASK-1004", title: "Send quotation", time: "15:00", dueDate: "2026-09-17", assignee: "Rahul", type: "Quotation", status: "Open", relatedTo: "QT-1001" },
   { id: "TASK-1005", title: "Follow-up pending enquiry", time: "17:00", dueDate: "2026-09-17", assignee: "Rahul", type: "Enquiry", status: "Open" },
 ];
+const seedTransporters: Transporter[] = [];
 const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 const openWhatsApp = (phone: string, message: string) => window.open(`https://wa.me/${phone.replace(/\D/g, "")}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
 const availableStock = (product: CatalogueItem) => (product.openingStock || 0) + (product.purchasedStock || 0) - (product.orderedStock || 0) - (product.damagedStock || 0);
@@ -295,9 +300,9 @@ const readDocumentText = async (file: File) => {
 };
 const storageKey = "geebee-crm-data-v1";
 const approvedWorkspaceEmails = ["vishu108818@gmail.com"];
-type SavedCrmData = { orders: Order[]; clients: Client[]; invoices: Invoice[]; catalogue: CatalogueItem[]; leads: Lead[]; quotes: Quote[]; tasks: SalesTask[] };
+type SavedCrmData = { orders: Order[]; clients: Client[]; invoices: Invoice[]; catalogue: CatalogueItem[]; leads: Lead[]; quotes: Quote[]; tasks: SalesTask[]; transporters: Transporter[] };
 const loadCrmData = (): SavedCrmData => {
-  const fallback = { orders: seedOrders, clients: seedClients, invoices: seedInvoices, catalogue: seedCatalogue, leads: seedLeads, quotes: seedQuotes, tasks: seedTasks };
+  const fallback = { orders: seedOrders, clients: seedClients, invoices: seedInvoices, catalogue: seedCatalogue, leads: seedLeads, quotes: seedQuotes, tasks: seedTasks, transporters: seedTransporters };
   if (typeof window === "undefined") return fallback;
   try {
     const saved = window.localStorage.getItem(storageKey);
@@ -311,6 +316,7 @@ const loadCrmData = (): SavedCrmData => {
       leads: Array.isArray(parsed.leads) ? parsed.leads : fallback.leads,
       quotes: Array.isArray(parsed.quotes) ? parsed.quotes : fallback.quotes,
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks : fallback.tasks,
+      transporters: Array.isArray(parsed.transporters) ? parsed.transporters : fallback.transporters,
     };
   } catch { return fallback; }
 };
@@ -355,6 +361,7 @@ export default function Home() {
     [leads, setLeads] = useState(seedLeads),
     [quotes, setQuotes] = useState(seedQuotes),
     [tasks, setTasks] = useState(seedTasks),
+    [transporters, setTransporters] = useState(seedTransporters),
     [storageReady, setStorageReady] = useState(false),
     [session, setSession] = useState<Session | null>(null),
     [authReady, setAuthReady] = useState(false),
@@ -369,7 +376,7 @@ export default function Home() {
     [clientProfile, setClientProfile] = useState<Client | null>(null),
     [notificationsOpen, setNotificationsOpen] = useState(false),
     [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({ Customers: true, "Leads & Enquiries": true, Sales: true, Products: true, Inventory: true, Operations: true, Billing: true, Imports: true, Reports: true, Automation: true, Settings: true }),
-    [modal, setModal] = useState<"order" | "client" | "invoice" | "catalogue" | "lead" | "quote" | "task" | null>(null),
+    [modal, setModal] = useState<"order" | "client" | "invoice" | "catalogue" | "lead" | "quote" | "task" | "transporter" | null>(null),
     [editing, setEditing] = useState<any>(null),
     [toast, setToast] = useState("");
   const recordSnapshots = useRef<Record<string, Map<string, string>>>({});
@@ -377,7 +384,7 @@ export default function Home() {
       setToast(m);
       setTimeout(() => setToast(""), 2600);
     },
-    show = (k: "order" | "client" | "invoice" | "catalogue" | "lead" | "quote" | "task", d?: any) => {
+    show = (k: "order" | "client" | "invoice" | "catalogue" | "lead" | "quote" | "task" | "transporter", d?: any) => {
       setEditing(d || null);
       setModal(k);
     };
@@ -390,13 +397,13 @@ export default function Home() {
   };
   useEffect(() => {
     const saved = loadCrmData();
-    setOrders(saved.orders); setClients(saved.clients); setInvoices(saved.invoices); setCatalogue(saved.catalogue); setLeads(saved.leads); setQuotes(saved.quotes); setTasks(saved.tasks);
+    setOrders(saved.orders); setClients(saved.clients); setInvoices(saved.invoices); setCatalogue(saved.catalogue); setLeads(saved.leads); setQuotes(saved.quotes); setTasks(saved.tasks); setTransporters(saved.transporters);
     setStorageReady(true);
   }, []);
   useEffect(() => {
     if (!storageReady) return;
-    window.localStorage.setItem(storageKey, JSON.stringify({ orders, clients, invoices, catalogue, leads, quotes, tasks }));
-  }, [orders, clients, invoices, catalogue, leads, quotes, tasks, storageReady]);
+    window.localStorage.setItem(storageKey, JSON.stringify({ orders, clients, invoices, catalogue, leads, quotes, tasks, transporters }));
+  }, [orders, clients, invoices, catalogue, leads, quotes, tasks, transporters, storageReady]);
   useEffect(() => {
     if (!supabase) { setAuthReady(true); return; }
     supabase.auth.getSession().then(({ data }) => { setSession(data.session); setAuthReady(true); });
@@ -432,8 +439,8 @@ export default function Home() {
       if (failed?.error) { setCloudError("Database upgrade required: run the latest scalable CRM SQL script in Supabase, then refresh this page."); return; }
       const records = Object.fromEntries(scalableTables.map((config, index) => [config.key, (results[index].data || []) as ScalableRecord[]])) as Record<string, ScalableRecord[]>;
       const toItems = <T,>(key: string) => records[key].map((row) => row.data as T);
-      if (records.clients.length || records.catalogue.length || records.orders.length || records.invoices.length || records.leads.length || records.quotes.length || records.tasks.length) {
-        setClients(toItems<Client>("clients")); setCatalogue(toItems<CatalogueItem>("catalogue")); setOrders(toItems<Order>("orders")); setInvoices(toItems<Invoice>("invoices")); setLeads(toItems<Lead>("leads")); setQuotes(toItems<Quote>("quotes")); setTasks(toItems<SalesTask>("tasks"));
+      if (records.clients.length || records.catalogue.length || records.orders.length || records.invoices.length || records.leads.length || records.quotes.length || records.tasks.length || records.transporters.length) {
+        setClients(toItems<Client>("clients")); setCatalogue(toItems<CatalogueItem>("catalogue")); setOrders(toItems<Order>("orders")); setInvoices(toItems<Invoice>("invoices")); setLeads(toItems<Lead>("leads")); setQuotes(toItems<Quote>("quotes")); setTasks(toItems<SalesTask>("tasks")); setTransporters(toItems<Transporter>("transporters"));
         recordSnapshots.current = Object.fromEntries(scalableTables.map((config) => [config.table, new Map(records[config.key].map((row) => [row.record_id, JSON.stringify(row.data)]))]));
       } else recordSnapshots.current = {};
       setCloudError(""); setCloudReady(true);
@@ -445,7 +452,7 @@ export default function Home() {
     const cloud = supabase;
     if (!cloud || !session || !cloudReady || !workspaceOwnerId) return;
     const collections: Array<{ table: string; items: any[]; search: (item: any) => string }> = [
-      { table: "crm_clients", items: clients, search: scalableTables[0].search }, { table: "crm_products", items: catalogue, search: scalableTables[1].search }, { table: "crm_orders", items: orders, search: scalableTables[2].search }, { table: "crm_invoices", items: invoices, search: scalableTables[3].search }, { table: "crm_leads", items: leads, search: scalableTables[4].search }, { table: "crm_quotes", items: quotes, search: scalableTables[5].search }, { table: "crm_tasks", items: tasks, search: scalableTables[6].search },
+      { table: "crm_clients", items: clients, search: scalableTables[0].search }, { table: "crm_products", items: catalogue, search: scalableTables[1].search }, { table: "crm_orders", items: orders, search: scalableTables[2].search }, { table: "crm_invoices", items: invoices, search: scalableTables[3].search }, { table: "crm_leads", items: leads, search: scalableTables[4].search }, { table: "crm_quotes", items: quotes, search: scalableTables[5].search }, { table: "crm_tasks", items: tasks, search: scalableTables[6].search }, { table: "crm_transporters", items: transporters, search: scalableTables[7].search },
     ];
     const syncTimer = window.setTimeout(async () => {
       for (const { table, items, search } of collections) {
@@ -459,7 +466,7 @@ export default function Home() {
       }
     }, 650);
     return () => window.clearTimeout(syncTimer);
-  }, [orders, clients, invoices, catalogue, leads, quotes, tasks, session, cloudReady, workspaceOwnerId]);
+  }, [orders, clients, invoices, catalogue, leads, quotes, tasks, transporters, session, cloudReady, workspaceOwnerId]);
   useEffect(() => {
     const cloud = supabase;
     if (!cloud || !isAdmin || !workspaceOwnerId) return;
@@ -486,7 +493,7 @@ export default function Home() {
     { label: "Sales", icon: BriefcaseBusiness, items: [{ label: "Quotations", section: "Quotations", module: "Orders" as CrmModule, count: String(quotes.filter((quote) => quote.status !== "Converted").length) }, { label: "Orders", section: "Orders", module: "Orders" as CrmModule, count: String(orders.length) }, { label: "Backorders", section: "Backorders", module: "Orders" as CrmModule }, { label: "Returns", section: "Returns", module: "Orders" as CrmModule }] },
     { label: "Products", icon: Boxes, items: [{ label: "Products / SKUs", section: "Catalogue", module: "Catalogue" as CrmModule, count: String(catalogue.length) }, { label: "Categories", section: "Categories", module: "Catalogue" as CrmModule }, { label: "Price Lists", section: "Price Lists", module: "Catalogue" as CrmModule }, { label: "Stock", section: "Stock", module: "Catalogue" as CrmModule }] },
     { label: "Inventory", icon: Warehouse, items: [{ label: "Stock Overview", section: "Stock Overview" }, { label: "Stock Movements", section: "Stock Movements" }, { label: "Low Stock", section: "Low Stock" }, { label: "Reserved Stock", section: "Reserved Stock" }, { label: "Warehouses", section: "Warehouses" }] },
-    { label: "Operations", icon: Truck, items: [{ label: "Picking", section: "Picking" }, { label: "Packing", section: "Packing" }, { label: "Dispatch", section: "Dispatch" }, { label: "Delivery", section: "Delivery" }] },
+    { label: "Operations", icon: Truck, items: [{ label: "Transporters", section: "Transporters", module: "Shipments" as CrmModule, count: String(transporters.length) }, { label: "Picking", section: "Picking" }, { label: "Packing", section: "Packing" }, { label: "Dispatch", section: "Dispatch" }, { label: "Delivery", section: "Delivery" }] },
     { label: "Billing", icon: ReceiptText, items: [{ label: "Invoices", section: "Invoices", module: "Invoices" as CrmModule, count: String(invoices.filter((i) => i.status !== "Paid").length) }, { label: "Payments", section: "Payments", module: "Payments" as CrmModule, count: "2" }, { label: "Outstanding", section: "Outstanding", module: "Payments" as CrmModule }, { label: "Ageing", section: "Ageing", module: "Payments" as CrmModule }] },
     { label: "Imports", icon: ShipWheel, items: [{ label: "Suppliers", section: "Suppliers" }, { label: "Purchase Orders", section: "Purchase Orders" }, { label: "Shipments", section: "Shipments", module: "Shipments" as CrmModule }, { label: "Containers", section: "Containers", module: "Shipments" as CrmModule }, { label: "Landed Cost", section: "Landed Cost", module: "Shipments" as CrmModule }] },
     { label: "Reports", icon: ChartNoAxesCombined, items: [{ label: "Sales", section: "Sales Report" }, { label: "Customers", section: "Customer Report" }, { label: "Products", section: "Product Report" }, { label: "Inventory", section: "Inventory Report" }, { label: "Payments", section: "Payment Report" }, { label: "Sales Team", section: "Sales Team Report" }] },
@@ -497,7 +504,7 @@ export default function Home() {
     ...auditEvents.slice(0, 4).map((event) => ({ title: event.action, detail: `${event.actor_email} · ${event.module}`, time: new Date(event.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }) })),
     ...invoices.filter((invoice) => invoice.status !== "Paid").slice(0, 2).map((invoice) => ({ title: `${invoice.status} invoice ${invoice.id}`, detail: `${invoice.client} · ${invoice.amount} due ${invoice.due}`, time: "Needs attention" })),
   ].slice(0, 6);
-  const liveSections = new Set(["Overview", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Orders", "Backorders", "Invoices", "Catalogue", "Notifications", "Sales Team Report", "Sales Report", "Customer Report", "Product Report", "Inventory Report", "Payment Report", "Settings", "Recovery"]);
+  const liveSections = new Set(["Overview", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Orders", "Backorders", "Invoices", "Catalogue", "Transporters", "Notifications", "Sales Team Report", "Sales Report", "Customer Report", "Product Report", "Inventory Report", "Payment Report", "Settings", "Recovery"]);
   if (!authReady) return <div className="auth-screen"><div className="auth-card"><b>Opening secure workspace…</b></div></div>;
   if (!supabase) return <div className="auth-screen"><div className="auth-card"><span className="overline">GEEBEE CRM</span><h1>Cloud connection needed</h1><p>Add the Supabase environment settings to open this private workspace.</p></div></div>;
   if (!session) return <SignInScreen notice={accessNotice} />;
@@ -637,10 +644,11 @@ export default function Home() {
             remove={(ids) => { setCatalogue((current) => current.filter((item) => !ids.includes(item.id))); logActivity("Removed catalogue product", "Catalogue", ids.join(", ")); flash(`${ids.length} product${ids.length === 1 ? "" : "s"} removed from catalogue`); }}
           />
         )}{" "}
+        {section === "Transporters" && <TransportersPanel transporters={transporters.filter((item) => `${item.name} ${item.contact} ${item.phone} ${item.city || ""}`.toLowerCase().includes(search.toLowerCase()))} edit={(item) => show("transporter", item)} add={() => show("transporter")} remove={(ids) => { setTransporters((current) => current.filter((item) => !ids.includes(item.id))); logActivity("Removed transporter", "Transporters", ids.join(", ")); flash(`${ids.length} transporter${ids.length === 1 ? "" : "s"} removed`); }} />}{" "}
         {section === "Settings" && <TeamAccess members={members} workspaceOwnerId={workspaceOwnerId} canManage={isAdmin} onChange={setMembers} onAudit={logActivity} auditEvents={auditEvents} />}{" "}
-        {section === "Recovery" && <RecoveryPanel canManage={isAdmin} session={session} applyRestore={(data) => { setOrders(data.orders); setClients(data.clients); setInvoices(data.invoices); setCatalogue(data.catalogue); setLeads(data.leads); setQuotes(data.quotes); setTasks(data.tasks); logActivity("Applied Google Sheets recovery", "Data recovery", "Recovery snapshot created before restore"); flash("Backup restored. Your previous CRM state is saved as a recovery snapshot."); }} />}{" "}
+        {section === "Recovery" && <RecoveryPanel canManage={isAdmin} session={session} applyRestore={(data) => { setOrders(data.orders); setClients(data.clients); setInvoices(data.invoices); setCatalogue(data.catalogue); setLeads(data.leads); setQuotes(data.quotes); setTasks(data.tasks); setTransporters(data.transporters || []); logActivity("Applied Google Sheets recovery", "Data recovery", "Recovery snapshot created before restore"); flash("Backup restored. Your previous CRM state is saved as a recovery snapshot."); }} />}{" "}
         {section === "Notifications" && <AutomationPanel />}{" "}
-        {!(["Overview", "Orders", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Backorders", "Invoices", "Catalogue", "Settings", "Recovery", "Notifications", "Sales Team Report", "Sales Report", "Customer Report", "Product Report", "Inventory Report", "Payment Report"].includes(section)) && (
+        {!(["Overview", "Orders", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Backorders", "Invoices", "Catalogue", "Transporters", "Settings", "Recovery", "Notifications", "Sales Team Report", "Sales Report", "Customer Report", "Product Report", "Inventory Report", "Payment Report"].includes(section)) && (
           <section className="panel coming">
             <div className="modal-mark">
               <ClipboardList size={22} />
@@ -657,6 +665,7 @@ export default function Home() {
           order={editing}
           clients={clients}
           catalogue={catalogue}
+          transporters={transporters}
           close={() => setModal(null)}
           save={(o) => {
             let savedOrder = o;
@@ -745,6 +754,7 @@ export default function Home() {
       {modal === "lead" && <LeadModal lead={editing} close={() => setModal(null)} save={(lead) => { setLeads((current) => editing ? current.map((item) => item.id === editing.id ? lead : item) : [...current, lead]); setModal(null); logActivity(editing ? "Updated lead" : "Created lead", "Leads", `${lead.id} · ${lead.company}`); flash(editing ? "Lead updated" : "New lead created"); }} />}
       {modal === "quote" && <QuoteModal quote={editing} clients={clients} catalogue={catalogue} close={() => setModal(null)} save={(quote) => { setQuotes((current) => editing ? current.map((item) => item.id === editing.id ? quote : item) : [...current, quote]); setModal(null); logActivity(editing ? "Updated quotation" : "Created quotation", "Quotations", `${quote.id} · ${quote.customer}`); flash(editing ? "Quotation updated" : "Quotation created"); }} />}
       {modal === "task" && <TaskModal task={editing} close={() => setModal(null)} save={(task) => { setTasks((current) => editing ? current.map((item) => item.id === editing.id ? task : item) : [...current, task]); setModal(null); logActivity(editing ? "Updated task" : "Created task", "Follow-ups", task.title); flash(editing ? "Task updated" : "Task created"); }} />}
+      {modal === "transporter" && <TransporterModal transporter={editing} close={() => setModal(null)} save={(transporter) => { setTransporters((current) => editing ? current.map((item) => item.id === editing.id ? transporter : item) : [...current, transporter]); setModal(null); logActivity(editing ? "Updated transporter" : "Added transporter", "Transporters", transporter.name); flash(editing ? "Transporter updated" : "Transporter added"); }} />}
       {toast && (
         <div className="toast">
           <PackageCheck size={18} />
@@ -887,6 +897,17 @@ function Overview({
     </>
   );
 }
+function TransportersPanel({ transporters, edit, add, remove }: { transporters: Transporter[]; edit: (item: Transporter) => void; add: () => void; remove: (ids: number[]) => void }) {
+  const [selected, setSelected] = useState<number[]>([]);
+  const toggle = (id: number) => setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  const removeSelected = () => { if (!selected.length || !window.confirm(`Remove ${selected.length} transporter${selected.length === 1 ? "" : "s"}?`)) return; remove(selected); setSelected([]); };
+  return <section className="panel transporter-panel"><div className="panel-head"><div><span className="overline">OPERATIONS DIRECTORY</span><h2>Transport vendors</h2><p>Add approved transporters once, then assign the right vendor to every order.</p></div><button className="primary" type="button" onClick={add}><Plus size={16}/> Add transporter</button></div>{transporters.length ? <><div className="record-bulk-bar"><span>Select vendors to manage them together.</span>{selected.length > 0 && <button type="button" className="bulk-delete" onClick={removeSelected}><Trash2 size={14}/> Remove {selected.length}</button>}</div><div className="table-wrap"><table className="records"><thead><tr><th><input className="record-check" type="checkbox" checked={transporters.length > 0 && selected.length === transporters.length} onChange={() => setSelected(selected.length === transporters.length ? [] : transporters.map((item) => item.id))} aria-label="Select all transporters"/></th><th>TRANSPORTER</th><th>CONTACT</th><th>PHONE</th><th>CITY</th><th>SERVICE</th><th/></tr></thead><tbody>{transporters.map((item) => <tr key={item.id}><td><input className="record-check" type="checkbox" checked={selected.includes(item.id)} onChange={() => toggle(item.id)} aria-label={`Select ${item.name}`}/></td><td><b>{item.name}</b>{item.gstin && <small className="transporter-gstin">GSTIN: {item.gstin}</small>}</td><td>{item.contact || "—"}</td><td>{item.phone || "—"}</td><td>{item.city || "—"}</td><td><span className="transporter-service">{item.serviceType || "General"}</span></td><td><button className="edit-btn" type="button" onClick={() => edit(item)}><Pencil size={14}/> Edit</button></td></tr>)}</tbody></table></div></> : <div className="transporter-empty"><Truck size={25}/><h3>No transporters added</h3><p>Add your transport vendors to select them while creating an order.</p><button className="primary" type="button" onClick={add}>Add first transporter</button></div>}</section>;
+}
+function TransporterModal({ transporter, close, save }: { transporter: Transporter | null; close: () => void; save: (item: Transporter) => void }) {
+  const [form, setForm] = useState<Transporter>(transporter || { id: Date.now(), name: "", contact: "", phone: "", email: "", city: "", gstin: "", serviceType: "Road transport", notes: "" });
+  const update = (key: keyof Transporter, value: string) => setForm((current) => ({ ...current, [key]: value }));
+  return <Shell close={close}><div className="order-modal-head"><div className="modal-mark"><Truck size={22}/></div><div><span className="overline">TRANSPORT VENDOR</span><h2>{transporter ? "Edit transporter" : "Add transporter"}</h2><p>Save vendor information for quick assignment on orders.</p></div></div><div className="form-row"><label>Transporter name<input value={form.name} onChange={(event) => update("name", event.target.value)} placeholder="Vendor / transport company" required/></label><label>Contact person<input value={form.contact} onChange={(event) => update("contact", event.target.value)} placeholder="Contact person"/></label></div><div className="form-row"><label>Phone<input value={form.phone} onChange={(event) => update("phone", event.target.value)} placeholder="+91 98765 43210" required/></label><label>Email<input type="email" value={form.email || ""} onChange={(event) => update("email", event.target.value)} placeholder="operations@vendor.com"/></label></div><div className="form-row"><label>City<input value={form.city || ""} onChange={(event) => update("city", event.target.value)} placeholder="Mumbai"/></label><label>Service type<select value={form.serviceType || "Road transport"} onChange={(event) => update("serviceType", event.target.value)}>{["Road transport", "Courier", "Air cargo", "Rail freight", "Local delivery", "Other"].map((value) => <option key={value}>{value}</option>)}</select></label></div><label>GSTIN<input value={form.gstin || ""} onChange={(event) => update("gstin", event.target.value.toUpperCase())} placeholder="GSTIN, if applicable"/></label><label>Notes<textarea value={form.notes || ""} onChange={(event) => update("notes", event.target.value)} placeholder="Service areas, payment terms, or other notes"/></label><button className="primary modal-submit" type="button" disabled={!form.name.trim() || !form.phone.trim()} onClick={() => save({ ...form, name: form.name.trim(), contact: form.contact.trim(), phone: form.phone.trim() })}>Save transporter</button></Shell>;
+}
 function Orders({
   orders,
   clients,
@@ -969,7 +990,7 @@ function OrderTable({
                   <span className="mini-avatar">{o.avatar}</span>
                   <div>
                     <b>{o.client}</b>
-                    <small>{o.city}</small>
+                    <small>{o.city}{o.transporter ? ` · ${o.transporter}` : ""}</small>
                   </div>
                 </div>
               </td>
@@ -1428,7 +1449,7 @@ function LegacyOrderModal({
   );
 }
 function LegacyMultiProductOrderModal({ order, clients, close, save }: { order: Order | null; clients: Client[]; close: () => void; save: (o: Order) => void }) {
-  const base = order || { id: "GB-24092", client: "", city: "", eta: "", status: "Confirmed", payment: "Partial", avatar: "" };
+  const base = order || { id: "GB-24092", client: "", city: "", eta: "", status: "Confirmed", payment: "Partial", transporter: "", avatar: "" };
   const [f, setF] = useState(base);
   const [products, setProducts] = useState<ProductLine[]>(order?.products || (order ? [{ product: order.product, sku: order.sku, quantity: order.quantity, unitPrice: order.unitPrice }] : [{ product: "", sku: "", quantity: 0, unitPrice: 0 }]));
   const total = products.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
@@ -1437,8 +1458,8 @@ function LegacyMultiProductOrderModal({ order, clients, close, save }: { order: 
   const saveOrder = () => { const first = products[0]; save({ ...f, product: first.product, sku: first.sku, quantity: first.quantity, unitPrice: first.unitPrice, products }); };
   return <Shell close={close}><div className="modal-mark"><PackageCheck size={22} /></div><h2>{order ? "Edit order" : "Create a new order"}</h2><p>Add as many product lines as this order needs.</p><label>Client<select value={f.client} onChange={(e) => selectClient(e.target.value)} required><option value="" disabled>Select a client</option>{clients.map((client) => <option key={client.id}>{client.name}</option>)}</select></label><div className="product-lines"><div className="line-heading"><b>Product lines</b><span>{products.length} item{products.length !== 1 ? "s" : ""}</span></div>{products.map((item, index) => <div className="product-line" key={index}><div className="line-number">{index + 1}</div><div className="line-fields"><input aria-label="Product name" value={item.product} onChange={(e) => updateProduct(index, "product", e.target.value)} placeholder="Product name" required /><input aria-label="SKU ID" value={item.sku} onChange={(e) => updateProduct(index, "sku", e.target.value)} placeholder="SKU ID" required /><input aria-label="Quantity" type="number" min="1" value={item.quantity || ""} onChange={(e) => updateProduct(index, "quantity", Number(e.target.value))} placeholder="Qty" required /><input aria-label="Unit price" type="number" min="0" value={item.unitPrice || ""} onChange={(e) => updateProduct(index, "unitPrice", Number(e.target.value))} placeholder="Price ₹" required /></div><b className="line-total">{money(item.quantity * item.unitPrice)}</b>{products.length > 1 && <button type="button" className="remove-line" onClick={() => setProducts(products.filter((_, i) => i !== index))}>×</button>}</div>)}<button type="button" className="add-line" onClick={() => setProducts([...products, { product: "", sku: "", quantity: 0, unitPrice: 0 }])}><Plus size={15} /> Add another product</button></div><div className="order-total"><span>Order total</span><b>{money(total)}</b></div><div className="form-row"><label>Expected arrival<input type="date" value={f.eta} onChange={(e) => setF({ ...f, eta: e.target.value })} required /></label><label>Status<select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>{["Confirmed", "Production", "In transit", "Customs clearance", "Delivered"].map((value) => <option key={value}>{value}</option>)}</select></label></div><label>Payment status<select value={f.payment} onChange={(e) => setF({ ...f, payment: e.target.value })}>{["Partial", "Paid", "Overdue"].map((value) => <option key={value}>{value}</option>)}</select></label><button className="primary modal-submit" type="button" onClick={saveOrder}>Save order</button></Shell>;
 }
-function OrderModal({ order, clients, catalogue, close, save }: { order: Order | null; clients: Client[]; catalogue: CatalogueItem[]; close: () => void; save: (o: Order) => void }) {
-  const base = order || { id: "GB-24092", client: "", city: "", eta: "", status: "Confirmed", payment: "Partial", avatar: "" };
+function OrderModal({ order, clients, catalogue, transporters, close, save }: { order: Order | null; clients: Client[]; catalogue: CatalogueItem[]; transporters: Transporter[]; close: () => void; save: (o: Order) => void }) {
+  const base = order || { id: "GB-24092", client: "", city: "", eta: "", status: "Confirmed", payment: "Partial", transporter: "", avatar: "" };
   const [f, setF] = useState(base);
   const [products, setProducts] = useState<ProductLine[]>(order?.products || (order ? [{ product: order.product, sku: order.sku, quantity: order.quantity, unitPrice: order.unitPrice }] : [{ product: "", sku: "", quantity: 0, unitPrice: 0 }]));
   const [preview, setPreview] = useState("");
@@ -1470,6 +1491,17 @@ function OrderModal({ order, clients, catalogue, close, save }: { order: Order |
     });
     return () => selectors.forEach(({ input, selector }) => { input.style.display = ""; selector.remove(); });
   }, [catalogue, f.client, products]);
+  useEffect(() => {
+    const productLines = document.querySelector(".product-lines");
+    if (!productLines?.parentElement) return;
+    const label = document.createElement("label"); label.className = "order-transporter-field"; label.textContent = "Transporter";
+    const selector = document.createElement("select"); selector.setAttribute("aria-label", "Transporter"); selector.append(new Option("Select transporter (optional)", ""));
+    transporters.forEach((item) => selector.append(new Option(`${item.name}${item.city ? ` · ${item.city}` : ""}`, item.name)));
+    selector.value = f.transporter || "";
+    selector.onchange = () => setF((current) => ({ ...current, transporter: selector.value }));
+    label.append(selector); productLines.parentElement.insertBefore(label, productLines);
+    return () => label.remove();
+  }, [transporters, f.transporter]);
   useEffect(() => { const capture = document.querySelector(".document-capture"); if (!capture) return; const button = document.createElement("button"); button.type = "button"; button.className = "outline"; button.textContent = "Download client order format"; button.onclick = downloadClientOrderFormat; capture.append(button); return () => button.remove(); }, []);
   const scanDocument = async (file: File) => {
     setPreview((file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) ? "" : URL.createObjectURL(file)); setScanState("scanning"); setScanNote("Reading document and finding product lines…");

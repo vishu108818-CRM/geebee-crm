@@ -1,0 +1,10 @@
+.transporter-panel .panel-head { align-items: flex-start; }
+.transporter-panel .panel-head .primary { display: inline-flex; align-items: center; gap: 7px; }
+.transporter-panel .records small.transporter-gstin { display: block; color: #8c747c; font-size: .68rem; margin-top: 3px; }
+.transporter-service { color: #7b1e36; background: #f7e9ed; border-radius: 999px; padding: 4px 8px; font-size: .72rem; font-weight: 700; white-space: nowrap; }
+.transporter-empty { display: grid; justify-items: center; text-align: center; gap: 7px; padding: 54px 18px; color: #87757b; }
+.transporter-empty svg { color: #8d2945; }
+.transporter-empty h3 { margin: 3px 0 0; color: #49363d; }
+.transporter-empty p { margin: 0 0 10px; font-size: .88rem; }
+.order-transporter-field { margin: 12px 0; }
+.order-transporter-field select { width: 100%; }
