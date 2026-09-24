@@ -342,7 +342,10 @@ const readInternalOrderSheetImage = async (file: File): Promise<InternalOrderShe
     const products: ProductLine[] = []; let blankRows = 0;
     for (let row = 0; row < 10; row += 1) {
       const top = (245 + row * 21) * y;
-      const [sku, quantityText, priceText, valueText] = await Promise.all([readCell(44 * x, top, 95 * x, 20 * y), readCell(141 * x, top, 96 * x, 20 * y, true), readCell(239 * x, top, 95 * x, 20 * y, true), readCell(336 * x, top, 96 * x, 20 * y, true)]);
+      const sku = await readCell(44 * x, top, 95 * x, 20 * y);
+      const quantityText = await readCell(141 * x, top, 96 * x, 20 * y, true);
+      const priceText = await readCell(239 * x, top, 95 * x, 20 * y, true);
+      const valueText = await readCell(336 * x, top, 96 * x, 20 * y, true);
       const skuMatch = sku.match(/[A-Z]{1,6}(?:\s*[- ]?\s*\d{2,8})/i); const quantity = Number(quantityText.replace(/[^\d]/g, "")); const value = Number(valueText.replace(/[^\d.]/g, "")); const scannedPrice = Number(priceText.replace(/[^\d.]/g, ""));
       if (!skuMatch || !quantity) { blankRows += 1; if (blankRows >= 2) break; continue; }
       blankRows = 0; const calculatedPrice = value && quantity ? value / quantity : 0; const unitPrice = calculatedPrice || scannedPrice;
