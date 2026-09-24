@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./product-lines.css";
 import "./catalogue.css";
+import "./catalogue-image-fit.css";
 import "./catalogue-v2.css";
 import "./catalogue-delete.css";
 import "./auth.css";

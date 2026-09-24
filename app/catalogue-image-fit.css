@@ -1,0 +1,10 @@
+/* Preserve the full product photo: never crop it to fill the catalogue tile. */
+.catalogue-image img {
+  box-sizing: border-box;
+  object-fit: contain !important;
+  padding: 8px;
+}
+
+.catalogue-card:hover .catalogue-image img {
+  transform: none;
+}
