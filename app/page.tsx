@@ -298,6 +298,27 @@ const readDocumentText = async (file: File) => {
   const { recognize } = await import("tesseract.js");
   return (await recognize(file, "eng")).data.text;
 };
+type InternalOrderSheet = { client: string; eta: string; products: ProductLine[]; note: string };
+const skuKey = (value: string) => value.replace(/[^a-z0-9]/gi, "").toLowerCase();
+const parseInternalOrderSheet = (raw: string): InternalOrderSheet | null => {
+  const lines = raw.replace(/\r/g, "").split("\n").map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const headerAt = lines.findIndex((line) => /\bitem\b/i.test(line) && /\b(?:quantity|qty)\b/i.test(line) && /\bprice\b/i.test(line));
+  if (headerAt < 0) return null;
+  const dateText = lines.slice(0, headerAt).join(" ").match(/date\s*[-: ]*([0-3]?\d[.\/-][01]?\d[.\/-](?:20)?\d{2})/i)?.[1];
+  let eta = "";
+  if (dateText) { const [day, month, year] = dateText.split(/[.\/-]/); eta = `${year.length === 2 ? `20${year}` : year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`; }
+  const client = lines.slice(0, headerAt).filter((line) => !/\bdate\b/i.test(line)).filter((line) => !/^[A-Z]$/.test(line)).at(-1) || "";
+  const products: ProductLine[] = [];
+  const trailing: string[] = [];
+  for (const line of lines.slice(headerAt + 1)) {
+    if (/\btotal\b/i.test(line)) { const beforeTotal = line.replace(/\btotal\b.*$/i, "").trim(); if (beforeTotal && !/^\d[\d,.]*$/.test(beforeTotal)) trailing.push(beforeTotal); break; }
+    const match = line.match(/^([A-Z]{1,6}(?:\s*[- ]?\s*\d{2,8}))\s+([\d,]+)\s+([\d,.]+)(?:\s+[\d,.]+)?(?:\s+(.*))?$/i);
+    if (!match) continue;
+    products.push({ product: "", sku: match[1].replace(/\s+/g, "-").replace(/-+/g, "-"), quantity: Number(match[2].replaceAll(",", "")) || 0, unitPrice: Number(match[3].replaceAll(",", "")) || 0 });
+    if (match[4]) trailing.push(match[4]);
+  }
+  return products.length ? { client, eta, products, note: trailing.join(" · ") } : null;
+};
 const storageKey = "geebee-crm-data-v1";
 const approvedWorkspaceEmails = ["vishu108818@gmail.com"];
 type SavedCrmData = { orders: Order[]; clients: Client[]; invoices: Invoice[]; catalogue: CatalogueItem[]; leads: Lead[]; quotes: Quote[]; tasks: SalesTask[]; transporters: Transporter[] };
@@ -1506,7 +1527,17 @@ function OrderModal({ order, clients, catalogue, transporters, close, save }: { 
   const scanDocument = async (file: File) => {
     setPreview((file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) ? "" : URL.createObjectURL(file)); setScanState("scanning"); setScanNote("Reading document and finding product lines…");
     try {
-      const text = (await readDocumentText(file)).replace(/\s+/g, " ");
+      const rawText = await readDocumentText(file);
+      const internalSheet = parseInternalOrderSheet(rawText);
+      if (internalSheet) {
+        const matchedClient = clients.find((client) => client.name.toLowerCase() === internalSheet.client.toLowerCase());
+        const clientName = matchedClient?.name || internalSheet.client;
+        setF((current) => ({ ...current, client: clientName || current.client, city: matchedClient?.city || current.city, eta: internalSheet.eta || current.eta, avatar: matchedClient?.avatar || initials(clientName || current.client) }));
+        setProducts(internalSheet.products.map((line) => { const catalogueMatch = catalogue.find((item) => skuKey(item.sku) === skuKey(line.sku)); return { product: catalogueMatch?.name || line.product || `Product ${line.sku}`, sku: catalogueMatch?.sku || line.sku, quantity: line.quantity, unitPrice: specialRate(clientName, catalogueMatch?.sku || line.sku) ?? catalogueMatch?.unitPrice ?? line.unitPrice }; }));
+        setScanState("ready"); setScanNote(`GeeBee internal order sheet recognised: ${internalSheet.products.length} product line${internalSheet.products.length === 1 ? "" : "s"} added${clientName ? ` for ${clientName}` : ""}. Please review, then save the new order.${internalSheet.note ? ` Note: ${internalSheet.note}` : ""}`);
+        return;
+      }
+      const text = rawText.replace(/\s+/g, " ");
       const matchedClient = clients.find((client) => text.toLowerCase().includes(client.name.toLowerCase()));
       if (matchedClient) selectClient(matchedClient.name);
       const sku = text.match(/(?:sku|item\s*code|code)\s*[:#-]?\s*([A-Z]{1,4}[- ]?\d{2,8})/i)?.[1]?.replace(" ", "-") || "";
