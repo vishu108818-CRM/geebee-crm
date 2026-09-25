@@ -365,11 +365,23 @@ const readInternalOrderSheetImage = async (file: File): Promise<InternalOrderShe
       const top = rowStart + row * 21 * y;
       // A little vertical overlap makes this resilient to WhatsApp/iPhone
       // screenshots whose grid line is one or two pixels higher or lower.
-      const sku = await readCell(44 * x, top - 2 * y, 95 * x, 24 * y);
-      const quantityText = await readCell(141 * x, top - 2 * y, 96 * x, 24 * y, true);
+      let sku = await readCell(44 * x, top - 2 * y, 95 * x, 24 * y);
+      let quantityText = await readCell(141 * x, top - 2 * y, 96 * x, 24 * y, true);
       const priceText = await readCell(239 * x, top - 2 * y, 95 * x, 24 * y, true);
       const valueText = await readCell(336 * x, top - 2 * y, 96 * x, 24 * y, true);
-      const skuMatch = sku.match(/[A-Z]{1,6}(?:\s*[- ]?\s*\d{2,8})/i); const quantity = Number(quantityText.replace(/[^\d]/g, "")); const value = Number(valueText.replace(/[^\d.]/g, "")); const scannedPrice = Number(priceText.replace(/[^\d.]/g, ""));
+      let skuMatch = sku.match(/[A-Z]{1,6}(?:\s*[- ]?\s*\d{2,8})/i); let quantity = Number(quantityText.replace(/[^\d]/g, ""));
+      // The final handwritten/phone-screenshot row commonly sits closest to a
+      // gridline. Retry only an unreadable row with two nearby crops rather
+      // than silently dropping it.
+      if (!skuMatch || !quantity) {
+        for (const shift of [-6, 4]) {
+          const retrySku = await readCell(44 * x, top + shift * y, 95 * x, 21 * y);
+          const retryQuantity = await readCell(141 * x, top + shift * y, 96 * x, 21 * y, true);
+          const candidateSku = retrySku.match(/[A-Z]{1,6}(?:\s*[- ]?\s*\d{2,8})/i); const candidateQuantity = Number(retryQuantity.replace(/[^\d]/g, ""));
+          if (candidateSku && candidateQuantity) { sku = retrySku; quantityText = retryQuantity; skuMatch = candidateSku; quantity = candidateQuantity; break; }
+        }
+      }
+      const value = Number(valueText.replace(/[^\d.]/g, "")); const scannedPrice = Number(priceText.replace(/[^\d.]/g, ""));
       if (!skuMatch || !quantity) { blankRows += 1; if (blankRows >= 2) break; continue; }
       blankRows = 0; const calculatedPrice = value && quantity ? value / quantity : 0; const unitPrice = calculatedPrice || scannedPrice;
       products.push({ product: "", sku: skuMatch[0].replace(/\s+/g, "-").replace(/-+/g, "-"), quantity, unitPrice });
@@ -1570,9 +1582,13 @@ function OrderModal({ order, clients, catalogue, transporters, createClient, clo
       selector.setAttribute("aria-label", "Select catalogue product");
       selector.append(new Option("Select product from catalogue", ""));
       catalogue.forEach((product) => selector.append(new Option(`${product.name} · ${product.sku} · ${money(specialRate(f.client, product.sku) ?? product.unitPrice)}`, product.sku)));
-      selector.value = products[index]?.sku || "";
+      const isKnownSku = catalogue.some((product) => skuKey(product.sku) === skuKey(products[index]?.sku || ""));
+      selector.value = isKnownSku ? products[index]?.sku || "" : "";
       selector.onchange = () => selectCatalogueProduct(index, selector.value);
-      input.style.display = "none";
+      // Keep the name field visible for an SKU that has not yet been entered
+      // in the catalogue. The order still remains usable and the placeholder
+      // name is visible for review instead of being hidden by this dropdown.
+      input.style.display = isKnownSku ? "none" : "";
       input.parentElement?.insertBefore(selector, input);
       return { input, selector };
     });
