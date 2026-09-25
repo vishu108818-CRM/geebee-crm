@@ -299,7 +299,7 @@ const readDocumentText = async (file: File) => {
   const { recognize } = await import("tesseract.js");
   return (await recognize(file, "eng")).data.text;
 };
-type InternalOrderSheet = { client: string; eta: string; products: ProductLine[]; note: string };
+type InternalOrderSheet = { client: string; eta: string; products: ProductLine[]; note: string; transporter?: string };
 const skuKey = (value: string) => value.replace(/[^a-z0-9]/gi, "").toLowerCase();
 const parseInternalOrderSheet = (raw: string): InternalOrderSheet | null => {
   const lines = raw.replace(/\r/g, "").split("\n").map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
@@ -386,7 +386,11 @@ const readInternalOrderSheetImage = async (file: File): Promise<InternalOrderShe
       blankRows = 0; const calculatedPrice = value && quantity ? value / quantity : 0; const unitPrice = calculatedPrice || scannedPrice;
       products.push({ product: "", sku: skuMatch[0].replace(/\s+/g, "-").replace(/-+/g, "-"), quantity, unitPrice });
     }
-    return products.length ? { client: client.replace(/^['’]/, "").trim(), eta, products, note: "GeeBee internal order sheet" } : null;
+    // The row immediately after the product lines has the transporter merged
+    // across the left-hand cells, followed by TOTAL on the right.
+    const transporterRead = products.length ? await readCell(44 * x, rowStart + products.length * 21 * y - 2 * y, 290 * x, 24 * y) : "";
+    const transporter = transporterRead.replace(/\b(?:total|remarks?)\b.*$/i, "").replace(/[^a-z0-9 &.-]/gi, "").replace(/\s+/g, " ").trim();
+    return products.length ? { client: client.replace(/^['’]/, "").trim(), eta, products, note: "GeeBee internal order sheet", transporter: transporter || undefined } : null;
   } finally { await worker.terminate(); URL.revokeObjectURL(source.src); }
 };
 const storageKey = "geebee-crm-data-v1";
@@ -1600,6 +1604,7 @@ function OrderModal({ order, clients, catalogue, transporters, createClient, clo
     const label = document.createElement("label"); label.className = "order-transporter-field"; label.textContent = "Transporter";
     const selector = document.createElement("select"); selector.setAttribute("aria-label", "Transporter"); selector.append(new Option("Select transporter (optional)", ""));
     transporters.forEach((item) => selector.append(new Option(`${item.name}${item.city ? ` · ${item.city}` : ""}`, item.name)));
+    if (f.transporter && !transporters.some((item) => skuKey(item.name) === skuKey(f.transporter || ""))) selector.append(new Option(`${f.transporter} — not yet in transporters`, f.transporter));
     selector.value = f.transporter || "";
     selector.onchange = () => setF((current) => ({ ...current, transporter: selector.value }));
     label.append(selector); productLines.parentElement.insertBefore(label, productLines);
@@ -1621,9 +1626,11 @@ function OrderModal({ order, clients, catalogue, transporters, createClient, clo
           createdClient = true;
         }
         const clientName = matchedClient?.name || internalSheet.client;
-        setF((current) => ({ ...current, client: clientName || current.client, city: matchedClient?.city || current.city, eta: internalSheet.eta || current.eta, avatar: matchedClient?.avatar || initials(clientName || current.client) }));
+        const matchedTransporter = transporters.find((item) => skuKey(item.name) === skuKey(internalSheet.transporter || ""));
+        const transporterName = matchedTransporter?.name || internalSheet.transporter || "";
+        setF((current) => ({ ...current, client: clientName || current.client, city: matchedClient?.city || current.city, eta: internalSheet.eta || current.eta, transporter: transporterName || current.transporter || "", avatar: matchedClient?.avatar || initials(clientName || current.client) }));
         setProducts(internalSheet.products.map((line) => { const catalogueMatch = catalogue.find((item) => skuKey(item.sku) === skuKey(line.sku)); return { product: catalogueMatch?.name || line.product || `Product ${line.sku}`, sku: catalogueMatch?.sku || line.sku, quantity: line.quantity, unitPrice: specialRate(clientName, catalogueMatch?.sku || line.sku) ?? catalogueMatch?.unitPrice ?? line.unitPrice }; }));
-        setScanState("ready"); setScanNote(`GeeBee internal order sheet recognised: ${internalSheet.products.length} product line${internalSheet.products.length === 1 ? "" : "s"} added${clientName ? ` for ${clientName}` : ""}.${createdClient ? " A new incomplete client profile was created—please complete it in Clients." : ""} Please review, then save the new order.${internalSheet.note ? ` Note: ${internalSheet.note}` : ""}`);
+        setScanState("ready"); setScanNote(`GeeBee internal order sheet recognised: ${internalSheet.products.length} product line${internalSheet.products.length === 1 ? "" : "s"} added${clientName ? ` for ${clientName}` : ""}${transporterName ? ` with transporter ${transporterName}` : ""}.${createdClient ? " A new incomplete client profile was created—please complete it in Clients." : ""} Please review, then save the new order.${internalSheet.note ? ` Note: ${internalSheet.note}` : ""}`);
         return;
       }
       const text = rawText.replace(/\s+/g, " ");
