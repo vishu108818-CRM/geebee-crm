@@ -326,7 +326,6 @@ const readInternalOrderSheetImage = async (file: File): Promise<InternalOrderShe
   // The saved GeeBee internal-order format is a phone screenshot: the useful
   // grid begins at these relative positions. Reading each cell avoids gridlines
   // confusing general OCR and preserves every product row.
-  if (source.width / source.height > 1.5 || source.width / source.height < 0.12) return null;
   const { createWorker, PSM } = await import("tesseract.js"); const worker = await createWorker("eng");
   const readCell = async (x: number, y: number, width: number, height: number, numeric = false) => {
     await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE, tessedit_char_whitelist: numeric ? "0123456789.," : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .:-" });
