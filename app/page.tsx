@@ -94,6 +94,7 @@ type Client = {
   avatar: string;
   specialRates?: ClientSpecialRate[];
 };
+const isClientProfileIncomplete = (client: Client) => !client.contact?.trim() || !client.phone?.trim() || !client.city?.trim() || !client.address?.trim() || !client.credit?.trim();
 type Invoice = {
   id: string;
   client: string;
@@ -744,6 +745,11 @@ export default function Home() {
           clients={clients}
           catalogue={catalogue}
           transporters={transporters}
+          createClient={(client) => {
+            setClients((current) => current.some((item) => item.name.trim().toLowerCase() === client.name.trim().toLowerCase()) ? current : [...current, client]);
+            logActivity("Created incomplete client from order sheet", "Clients", client.name);
+            flash(`${client.name} was added as an incomplete client profile.`);
+          }}
           close={() => setModal(null)}
           save={(o) => {
             let savedOrder = o;
@@ -1137,6 +1143,7 @@ function Clients({
             <tr>
               <th><input className="record-check" type="checkbox" checked={clients.length > 0 && clients.every((client) => selected.includes(client.id))} onChange={() => setSelected(selected.length === clients.length ? [] : clients.map((client) => client.id))} aria-label="Select all clients" /></th>
               <th>CLIENT</th>
+              <th>PROFILE</th>
               <th>LOCATION</th>
               <th>PRIMARY CONTACT</th>
               <th>PHONE</th>
@@ -1157,6 +1164,7 @@ function Clients({
                     <button className="client-name-link" type="button" onClick={() => view(c)}>{c.name}</button>
                   </div>
                 </td>
+                <td>{isClientProfileIncomplete(c) ? <span className="profile-incomplete">Incomplete</span> : <span className="profile-complete">Complete</span>}</td>
                 <td>{c.city}</td>
                 <td>{c.contact}</td>
                 <td>{c.phone}</td>
@@ -1537,7 +1545,7 @@ function LegacyMultiProductOrderModal({ order, clients, close, save }: { order: 
   const saveOrder = () => { const first = products[0]; save({ ...f, product: first.product, sku: first.sku, quantity: first.quantity, unitPrice: first.unitPrice, products }); };
   return <Shell close={close}><div className="modal-mark"><PackageCheck size={22} /></div><h2>{order ? "Edit order" : "Create a new order"}</h2><p>Add as many product lines as this order needs.</p><label>Client<select value={f.client} onChange={(e) => selectClient(e.target.value)} required><option value="" disabled>Select a client</option>{clients.map((client) => <option key={client.id}>{client.name}</option>)}</select></label><div className="product-lines"><div className="line-heading"><b>Product lines</b><span>{products.length} item{products.length !== 1 ? "s" : ""}</span></div>{products.map((item, index) => <div className="product-line" key={index}><div className="line-number">{index + 1}</div><div className="line-fields"><input aria-label="Product name" value={item.product} onChange={(e) => updateProduct(index, "product", e.target.value)} placeholder="Product name" required /><input aria-label="SKU ID" value={item.sku} onChange={(e) => updateProduct(index, "sku", e.target.value)} placeholder="SKU ID" required /><input aria-label="Quantity" type="number" min="1" value={item.quantity || ""} onChange={(e) => updateProduct(index, "quantity", Number(e.target.value))} placeholder="Qty" required /><input aria-label="Unit price" type="number" min="0" value={item.unitPrice || ""} onChange={(e) => updateProduct(index, "unitPrice", Number(e.target.value))} placeholder="Price ₹" required /></div><b className="line-total">{money(item.quantity * item.unitPrice)}</b>{products.length > 1 && <button type="button" className="remove-line" onClick={() => setProducts(products.filter((_, i) => i !== index))}>×</button>}</div>)}<button type="button" className="add-line" onClick={() => setProducts([...products, { product: "", sku: "", quantity: 0, unitPrice: 0 }])}><Plus size={15} /> Add another product</button></div><div className="order-total"><span>Order total</span><b>{money(total)}</b></div><div className="form-row"><label>Expected arrival<input type="date" value={f.eta} onChange={(e) => setF({ ...f, eta: e.target.value })} required /></label><label>Status<select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>{["Confirmed", "Production", "In transit", "Customs clearance", "Delivered"].map((value) => <option key={value}>{value}</option>)}</select></label></div><label>Payment status<select value={f.payment} onChange={(e) => setF({ ...f, payment: e.target.value })}>{["Partial", "Paid", "Overdue"].map((value) => <option key={value}>{value}</option>)}</select></label><button className="primary modal-submit" type="button" onClick={saveOrder}>Save order</button></Shell>;
 }
-function OrderModal({ order, clients, catalogue, transporters, close, save }: { order: Order | null; clients: Client[]; catalogue: CatalogueItem[]; transporters: Transporter[]; close: () => void; save: (o: Order) => void }) {
+function OrderModal({ order, clients, catalogue, transporters, createClient, close, save }: { order: Order | null; clients: Client[]; catalogue: CatalogueItem[]; transporters: Transporter[]; createClient: (client: Client) => void; close: () => void; save: (o: Order) => void }) {
   const base = order || { id: "GB-24092", client: "", city: "", eta: "", status: "Confirmed", payment: "Partial", transporter: "", avatar: "" };
   const [f, setF] = useState(base);
   const [products, setProducts] = useState<ProductLine[]>(order?.products || (order ? [{ product: order.product, sku: order.sku, quantity: order.quantity, unitPrice: order.unitPrice }] : [{ product: "", sku: "", quantity: 0, unitPrice: 0 }]));
@@ -1589,11 +1597,17 @@ function OrderModal({ order, clients, catalogue, transporters, close, save }: { 
       const rawText = recognisedSheet ? "" : await readDocumentText(file);
       const internalSheet = recognisedSheet || parseInternalOrderSheet(rawText);
       if (internalSheet) {
-        const matchedClient = clients.find((client) => client.name.toLowerCase() === internalSheet.client.toLowerCase());
+        let matchedClient = clients.find((client) => client.name.trim().toLowerCase() === internalSheet.client.trim().toLowerCase());
+        let createdClient = false;
+        if (!matchedClient && internalSheet.client.trim()) {
+          matchedClient = { id: Date.now(), customerId: `GB-C${String(Date.now()).slice(-4)}`, name: internalSheet.client.trim(), city: "", contact: "", phone: "", credit: "", customerStatus: "Prospect", avatar: initials(internalSheet.client), specialRates: [] };
+          createClient(matchedClient);
+          createdClient = true;
+        }
         const clientName = matchedClient?.name || internalSheet.client;
         setF((current) => ({ ...current, client: clientName || current.client, city: matchedClient?.city || current.city, eta: internalSheet.eta || current.eta, avatar: matchedClient?.avatar || initials(clientName || current.client) }));
         setProducts(internalSheet.products.map((line) => { const catalogueMatch = catalogue.find((item) => skuKey(item.sku) === skuKey(line.sku)); return { product: catalogueMatch?.name || line.product || `Product ${line.sku}`, sku: catalogueMatch?.sku || line.sku, quantity: line.quantity, unitPrice: specialRate(clientName, catalogueMatch?.sku || line.sku) ?? catalogueMatch?.unitPrice ?? line.unitPrice }; }));
-        setScanState("ready"); setScanNote(`GeeBee internal order sheet recognised: ${internalSheet.products.length} product line${internalSheet.products.length === 1 ? "" : "s"} added${clientName ? ` for ${clientName}` : ""}. Please review, then save the new order.${internalSheet.note ? ` Note: ${internalSheet.note}` : ""}`);
+        setScanState("ready"); setScanNote(`GeeBee internal order sheet recognised: ${internalSheet.products.length} product line${internalSheet.products.length === 1 ? "" : "s"} added${clientName ? ` for ${clientName}` : ""}.${createdClient ? " A new incomplete client profile was created—please complete it in Clients." : ""} Please review, then save the new order.${internalSheet.note ? ` Note: ${internalSheet.note}` : ""}`);
         return;
       }
       const text = rawText.replace(/\s+/g, " ");
