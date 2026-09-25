@@ -325,7 +325,7 @@ const readInternalOrderSheetImage = async (file: File): Promise<InternalOrderShe
   // The saved GeeBee internal-order format is a phone screenshot: the useful
   // grid begins at these relative positions. Reading each cell avoids gridlines
   // confusing general OCR and preserves every product row.
-  if (source.width / source.height > 0.6 || source.width / source.height < 0.35) return null;
+  if (source.width / source.height > 0.72 || source.width / source.height < 0.25) return null;
   const { createWorker, PSM } = await import("tesseract.js"); const worker = await createWorker("eng");
   const readCell = async (x: number, y: number, width: number, height: number, numeric = false) => {
     await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE, tessedit_char_whitelist: numeric ? "0123456789.," : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .:-" });
@@ -335,17 +335,39 @@ const readInternalOrderSheetImage = async (file: File): Promise<InternalOrderShe
   };
   try {
     const x = source.width / 591; const y = source.height / 1253;
-    const dateRead = await readCell(140 * x, 182 * y, 390 * x, 22 * y);
-    const client = await readCell(85 * x, 204 * y, 390 * x, 21 * y);
+    // Do not rely on the screenshot being exported at exactly the same height.
+    // The yellow ITEM / QUANTITY / PRICE header is the stable marker in every
+    // GeeBee sheet, so find it first and then read the rows beneath it.
+    const marker = document.createElement("canvas"); marker.width = source.width; marker.height = source.height;
+    const markerContext = marker.getContext("2d"); markerContext?.drawImage(source, 0, 0);
+    let headerBottom = 0;
+    const pixels = markerContext?.getImageData(0, 0, marker.width, marker.height).data;
+    if (pixels) {
+      const scanFrom = Math.floor(source.height * 0.12); const scanTo = Math.floor(source.height * 0.42);
+      for (let row = scanFrom; row < scanTo; row += 1) {
+        let yellowPixels = 0;
+        for (let column = Math.floor(source.width * 0.06); column < source.width * 0.92; column += Math.max(2, Math.floor(source.width / 130))) {
+          const at = (row * source.width + column) * 4; const red = pixels[at]; const green = pixels[at + 1]; const blue = pixels[at + 2];
+          if (red > 145 && green > 130 && blue < 105 && red + green > blue * 3) yellowPixels += 1;
+        }
+        if (yellowPixels >= 16) headerBottom = row;
+      }
+    }
+    const rowStart = headerBottom ? headerBottom + Math.max(1, Math.round(1.5 * y)) : 245 * y;
+    const headerTop = headerBottom ? headerBottom - Math.round(20 * y) : 225 * y;
+    const dateRead = await readCell(140 * x, Math.max(0, headerTop - 43 * y), 390 * x, 28 * y);
+    const client = await readCell(85 * x, Math.max(0, headerTop - 22 * y), 390 * x, 27 * y);
     const dateText = dateRead.match(/([0-3]?\d[.\/-][01]?\d[.\/-](?:20)?\d{2})/)?.[1];
     let eta = ""; if (dateText) { const [day, month, year] = dateText.split(/[.\/-]/); eta = `${year.length === 2 ? `20${year}` : year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`; }
     const products: ProductLine[] = []; let blankRows = 0;
     for (let row = 0; row < 10; row += 1) {
-      const top = (245 + row * 21) * y;
-      const sku = await readCell(44 * x, top, 95 * x, 20 * y);
-      const quantityText = await readCell(141 * x, top, 96 * x, 20 * y, true);
-      const priceText = await readCell(239 * x, top, 95 * x, 20 * y, true);
-      const valueText = await readCell(336 * x, top, 96 * x, 20 * y, true);
+      const top = rowStart + row * 21 * y;
+      // A little vertical overlap makes this resilient to WhatsApp/iPhone
+      // screenshots whose grid line is one or two pixels higher or lower.
+      const sku = await readCell(44 * x, top - 2 * y, 95 * x, 24 * y);
+      const quantityText = await readCell(141 * x, top - 2 * y, 96 * x, 24 * y, true);
+      const priceText = await readCell(239 * x, top - 2 * y, 95 * x, 24 * y, true);
+      const valueText = await readCell(336 * x, top - 2 * y, 96 * x, 24 * y, true);
       const skuMatch = sku.match(/[A-Z]{1,6}(?:\s*[- ]?\s*\d{2,8})/i); const quantity = Number(quantityText.replace(/[^\d]/g, "")); const value = Number(valueText.replace(/[^\d.]/g, "")); const scannedPrice = Number(priceText.replace(/[^\d.]/g, ""));
       if (!skuMatch || !quantity) { blankRows += 1; if (blankRows >= 2) break; continue; }
       blankRows = 0; const calculatedPrice = value && quantity ? value / quantity : 0; const unitPrice = calculatedPrice || scannedPrice;
