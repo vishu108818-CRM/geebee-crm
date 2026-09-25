@@ -1583,12 +1583,12 @@ function OrderModal({ order, clients, catalogue, transporters, createClient, clo
       selector.append(new Option("Select product from catalogue", ""));
       catalogue.forEach((product) => selector.append(new Option(`${product.name} · ${product.sku} · ${money(specialRate(f.client, product.sku) ?? product.unitPrice)}`, product.sku)));
       const isKnownSku = catalogue.some((product) => skuKey(product.sku) === skuKey(products[index]?.sku || ""));
-      selector.value = isKnownSku ? products[index]?.sku || "" : "";
+      if (!isKnownSku && products[index]?.sku) selector.append(new Option(`SKU ${products[index].sku} — not yet in catalogue`, products[index].sku));
+      selector.value = products[index]?.sku || "";
       selector.onchange = () => selectCatalogueProduct(index, selector.value);
-      // Keep the name field visible for an SKU that has not yet been entered
-      // in the catalogue. The order still remains usable and the placeholder
-      // name is visible for review instead of being hidden by this dropdown.
-      input.style.display = isKnownSku ? "none" : "";
+      // The catalogue dropdown is the single product control. An unknown SKU
+      // stays visible there as a clear prompt to add it to the master list.
+      input.style.display = "none";
       input.parentElement?.insertBefore(selector, input);
       return { input, selector };
     });
