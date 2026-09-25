@@ -335,7 +335,7 @@ const readInternalOrderSheetImage = async (file: File): Promise<InternalOrderShe
     const { data } = await worker.recognize(canvas); return data.text.replace(/\s+/g, " ").trim();
   };
   try {
-    const x = source.width / 591; const y = source.height / 1253;
+    const x = source.width / 591; let y = source.height / 1253;
     // Do not rely on the screenshot being exported at exactly the same height.
     // The yellow ITEM / QUANTITY / PRICE header is the stable marker in every
     // GeeBee sheet, so find it first and then read the rows beneath it.
@@ -358,6 +358,10 @@ const readInternalOrderSheetImage = async (file: File): Promise<InternalOrderShe
     }
     const gridWidth = gridRight - gridLeft;
     const columnWidth = gridWidth / 5;
+    // Screen captures often include a different amount of empty spreadsheet
+    // below the order. Scale from the five-column table itself, never from
+    // the full image height, so that empty rows cannot shift OCR cell crops.
+    if (strongestYellow >= 16) y = gridWidth / 485;
     const rowStart = headerBottom ? headerBottom + Math.max(1, Math.round(1.5 * y)) : 245 * y;
     const headerTop = headerBottom ? headerBottom - Math.round(20 * y) : 225 * y;
     const dateRead = await readCell(gridLeft + columnWidth, Math.max(0, headerTop - 43 * y), gridWidth * .8, 28 * y);
