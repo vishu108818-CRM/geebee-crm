@@ -326,7 +326,7 @@ const readInternalOrderSheetImage = async (file: File): Promise<InternalOrderShe
   // The saved GeeBee internal-order format is a phone screenshot: the useful
   // grid begins at these relative positions. Reading each cell avoids gridlines
   // confusing general OCR and preserves every product row.
-  if (source.width / source.height > 0.72 || source.width / source.height < 0.25) return null;
+  if (source.width / source.height > 1.5 || source.width / source.height < 0.12) return null;
   const { createWorker, PSM } = await import("tesseract.js"); const worker = await createWorker("eng");
   const readCell = async (x: number, y: number, width: number, height: number, numeric = false) => {
     await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE, tessedit_char_whitelist: numeric ? "0123456789.," : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .:-" });
@@ -341,23 +341,27 @@ const readInternalOrderSheetImage = async (file: File): Promise<InternalOrderShe
     // GeeBee sheet, so find it first and then read the rows beneath it.
     const marker = document.createElement("canvas"); marker.width = source.width; marker.height = source.height;
     const markerContext = marker.getContext("2d"); markerContext?.drawImage(source, 0, 0);
-    let headerBottom = 0;
+    let headerBottom = 0; let strongestYellow = 0; let gridLeft = 44 * x; let gridRight = 529 * x;
     const pixels = markerContext?.getImageData(0, 0, marker.width, marker.height).data;
     if (pixels) {
       const scanFrom = Math.floor(source.height * 0.12); const scanTo = Math.floor(source.height * 0.42);
       for (let row = scanFrom; row < scanTo; row += 1) {
-        let yellowPixels = 0;
-        for (let column = Math.floor(source.width * 0.06); column < source.width * 0.92; column += Math.max(2, Math.floor(source.width / 130))) {
+        let yellowPixels = 0; let left = source.width; let right = 0;
+        const step = Math.max(2, Math.floor(source.width / 130));
+        for (let column = Math.floor(source.width * 0.02); column < source.width * 0.98; column += step) {
           const at = (row * source.width + column) * 4; const red = pixels[at]; const green = pixels[at + 1]; const blue = pixels[at + 2];
-          if (red > 145 && green > 130 && blue < 105 && red + green > blue * 3) yellowPixels += 1;
+          if (red > 145 && green > 130 && blue < 105 && red + green > blue * 3) { yellowPixels += 1; left = Math.min(left, column); right = Math.max(right, column); }
         }
         if (yellowPixels >= 16) headerBottom = row;
+        if (yellowPixels > strongestYellow && right > left) { strongestYellow = yellowPixels; gridLeft = Math.max(0, left - step); gridRight = Math.min(source.width, right + step); }
       }
     }
+    const gridWidth = gridRight - gridLeft;
+    const columnWidth = gridWidth / 5;
     const rowStart = headerBottom ? headerBottom + Math.max(1, Math.round(1.5 * y)) : 245 * y;
     const headerTop = headerBottom ? headerBottom - Math.round(20 * y) : 225 * y;
-    const dateRead = await readCell(140 * x, Math.max(0, headerTop - 43 * y), 390 * x, 28 * y);
-    const client = await readCell(85 * x, Math.max(0, headerTop - 22 * y), 390 * x, 27 * y);
+    const dateRead = await readCell(gridLeft + columnWidth, Math.max(0, headerTop - 43 * y), gridWidth * .8, 28 * y);
+    const client = await readCell(gridLeft + gridWidth * .085, Math.max(0, headerTop - 22 * y), gridWidth * .8, 27 * y);
     const dateText = dateRead.match(/([0-3]?\d[.\/-][01]?\d[.\/-](?:20)?\d{2})/)?.[1];
     let eta = ""; if (dateText) { const [day, month, year] = dateText.split(/[.\/-]/); eta = `${year.length === 2 ? `20${year}` : year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`; }
     const products: ProductLine[] = []; let blankRows = 0;
@@ -365,18 +369,18 @@ const readInternalOrderSheetImage = async (file: File): Promise<InternalOrderShe
       const top = rowStart + row * 21 * y;
       // A little vertical overlap makes this resilient to WhatsApp/iPhone
       // screenshots whose grid line is one or two pixels higher or lower.
-      let sku = await readCell(44 * x, top - 2 * y, 95 * x, 24 * y);
-      let quantityText = await readCell(141 * x, top - 2 * y, 96 * x, 24 * y, true);
-      const priceText = await readCell(239 * x, top - 2 * y, 95 * x, 24 * y, true);
-      const valueText = await readCell(336 * x, top - 2 * y, 96 * x, 24 * y, true);
+      let sku = await readCell(gridLeft, top - 2 * y, columnWidth, 24 * y);
+      let quantityText = await readCell(gridLeft + columnWidth, top - 2 * y, columnWidth, 24 * y, true);
+      const priceText = await readCell(gridLeft + columnWidth * 2, top - 2 * y, columnWidth, 24 * y, true);
+      const valueText = await readCell(gridLeft + columnWidth * 3, top - 2 * y, columnWidth, 24 * y, true);
       let skuMatch = sku.match(/[A-Z]{1,6}(?:\s*[- ]?\s*\d{2,8})/i); let quantity = Number(quantityText.replace(/[^\d]/g, ""));
       // The final handwritten/phone-screenshot row commonly sits closest to a
       // gridline. Retry only an unreadable row with two nearby crops rather
       // than silently dropping it.
       if (!skuMatch || !quantity) {
         for (const shift of [-6, 4]) {
-          const retrySku = await readCell(44 * x, top + shift * y, 95 * x, 21 * y);
-          const retryQuantity = await readCell(141 * x, top + shift * y, 96 * x, 21 * y, true);
+          const retrySku = await readCell(gridLeft, top + shift * y, columnWidth, 21 * y);
+          const retryQuantity = await readCell(gridLeft + columnWidth, top + shift * y, columnWidth, 21 * y, true);
           const candidateSku = retrySku.match(/[A-Z]{1,6}(?:\s*[- ]?\s*\d{2,8})/i); const candidateQuantity = Number(retryQuantity.replace(/[^\d]/g, ""));
           if (candidateSku && candidateQuantity) { sku = retrySku; quantityText = retryQuantity; skuMatch = candidateSku; quantity = candidateQuantity; break; }
         }
@@ -388,7 +392,7 @@ const readInternalOrderSheetImage = async (file: File): Promise<InternalOrderShe
     }
     // The row immediately after the product lines has the transporter merged
     // across the left-hand cells, followed by TOTAL on the right.
-    const transporterRead = products.length ? await readCell(44 * x, rowStart + products.length * 21 * y - 2 * y, 290 * x, 24 * y) : "";
+    const transporterRead = products.length ? await readCell(gridLeft, rowStart + products.length * 21 * y - 2 * y, columnWidth * 3, 24 * y) : "";
     const transporter = transporterRead.replace(/\b(?:total|remarks?)\b.*$/i, "").replace(/[^a-z0-9 &.-]/gi, "").replace(/\s+/g, " ").trim();
     return products.length ? { client: client.replace(/^['’]/, "").trim(), eta, products, note: "GeeBee internal order sheet", transporter: transporter || undefined } : null;
   } finally { await worker.terminate(); URL.revokeObjectURL(source.src); }
