@@ -610,6 +610,37 @@ export default function Home() {
     logActivity("Cancelled order and released stock", "Orders", cancelledIds.join(", "));
     flash(`Cancelled ${order.id}; stock allocation released.`);
   };
+  const removeOrders = (ids: string[]) => {
+    const selectedIds = new Set(ids);
+    const primaryIds = new Set<string>();
+    const advanceIds = new Set<string>();
+    ids.forEach((id) => {
+      const order = orders.find((item) => item.id === id);
+      if (!order) return;
+      if (order.status === "Advance order") {
+        const primaryId = id.replace(/^ADV-/, "");
+        if (!selectedIds.has(primaryId)) advanceIds.add(id);
+        return;
+      }
+      primaryIds.add(id);
+      const advanceId = `ADV-${id}`;
+      if (orders.some((item) => item.id === advanceId)) advanceIds.add(advanceId);
+    });
+    const removedIds = new Set([...primaryIds, ...advanceIds]);
+    const dispatchedLines = [...primaryIds].flatMap((id) => linesFor(orders.find((item) => item.id === id) || {} as Order));
+    const reservedLines = [...advanceIds].flatMap((id) => linesFor(orders.find((item) => item.id === id) || {} as Order));
+    setCatalogue((current) => current.map((product) => {
+      const dispatched = dispatchedLines.filter((line) => skuKey(line.sku) === skuKey(product.sku)).reduce((sum, line) => sum + line.quantity, 0);
+      const reserved = reservedLines.filter((line) => skuKey(line.sku) === skuKey(product.sku)).reduce((sum, line) => sum + line.quantity, 0);
+      if (!dispatched && !reserved) return product;
+      return { ...product, availableQuantity: availableStock(product) + dispatched, reservedStock: Math.max(0, (product.reservedStock || 0) - reserved) };
+    }));
+    setOrders((current) => current.filter((item) => !removedIds.has(item.id)));
+    setInvoices((current) => current.filter((invoice) => !removedIds.has(invoice.order)));
+    setTasks((current) => current.filter((task) => !task.relatedTo || !removedIds.has(task.relatedTo)));
+    logActivity("Removed order and released stock", "Orders", [...removedIds].join(", "));
+    flash(`${ids.length} order${ids.length === 1 ? "" : "s"} removed; allocated stock returned to available inventory.`);
+  };
   const initialiseOpeningStock = async () => {
     if (!supabase || !session) return;
     const response = await fetch("/api/admin/initialize-opening-stock", { method: "POST", headers: { Authorization: `Bearer ${session.access_token}` } });
@@ -631,7 +662,7 @@ export default function Home() {
     { label: "Dashboard", icon: LayoutDashboard, items: [{ label: "Dashboard", section: "Overview", module: "Overview" as CrmModule }] },
     { label: "Customers", icon: Users, items: [{ label: "All Customers", section: "Clients", module: "Clients" as CrmModule, count: String(clients.length) }, { label: "New Customers", section: "New Customers", module: "Clients" as CrmModule }, { label: "Customer Groups", section: "Customer Groups", module: "Clients" as CrmModule }, { label: "Customer Activity", section: "Customer Activity", module: "Clients" as CrmModule }] },
     { label: "Leads & Enquiries", icon: Target, items: [{ label: "Leads", section: "Leads", module: "Leads" as CrmModule, count: String(leads.filter((lead) => lead.status !== "Lost" && lead.status !== "Order Created").length) }, { label: "Enquiries", section: "Enquiries", module: "Leads" as CrmModule }, { label: "Follow-ups", section: "Follow-ups", module: "Leads" as CrmModule }, { label: "Lost Leads", section: "Lost Leads", module: "Leads" as CrmModule }] },
-    { label: "Sales", icon: BriefcaseBusiness, items: [{ label: "Quotations", section: "Quotations", module: "Orders" as CrmModule, count: String(quotes.filter((quote) => quote.status !== "Converted").length) }, { label: "Orders", section: "Orders", module: "Orders" as CrmModule, count: String(orders.length) }, { label: "Backorders", section: "Backorders", module: "Orders" as CrmModule }, { label: "Returns", section: "Returns", module: "Orders" as CrmModule }] },
+    { label: "Sales", icon: BriefcaseBusiness, items: [{ label: "Quotations", section: "Quotations", module: "Orders" as CrmModule, count: String(quotes.filter((quote) => quote.status !== "Converted").length) }, { label: "Orders", section: "Orders", module: "Orders" as CrmModule, count: String(orders.filter((order) => !["Advance order", "Backorder"].includes(order.status)).length) }, { label: "Backorders", section: "Backorders", module: "Orders" as CrmModule, count: String(orders.filter((order) => order.status === "Advance order").length) }, { label: "Returns", section: "Returns", module: "Orders" as CrmModule }] },
     { label: "Products", icon: Boxes, items: [{ label: "Products / SKUs", section: "Catalogue", module: "Catalogue" as CrmModule, count: String(catalogue.length) }, { label: "Categories", section: "Categories", module: "Catalogue" as CrmModule }, { label: "Price Lists", section: "Price Lists", module: "Catalogue" as CrmModule }, { label: "Stock", section: "Stock", module: "Catalogue" as CrmModule }] },
     { label: "Inventory", icon: Warehouse, items: [{ label: "Stock Overview", section: "Stock Overview" }, { label: "Stock Movements", section: "Stock Movements" }, { label: "Low Stock", section: "Low Stock" }, { label: "Reserved Stock", section: "Reserved Stock" }, { label: "Warehouses", section: "Warehouses" }] },
     { label: "Operations", icon: Truck, items: [{ label: "Transporters", section: "Transporters", module: "Shipments" as CrmModule, count: String(transporters.length) }, { label: "Picking", section: "Picking" }, { label: "Packing", section: "Packing" }, { label: "Dispatch", section: "Dispatch" }, { label: "Delivery", section: "Delivery" }] },
@@ -745,7 +776,7 @@ export default function Home() {
           />
         )}{" "}
         {section === "Orders" && (
-          <Orders orders={shown} clients={clients} edit={(o) => show("order", o)} cancel={cancelOrder} remove={(ids) => { setOrders((current) => current.filter((item) => !ids.includes(item.id))); logActivity("Removed order", "Orders", ids.join(", ")); flash(`${ids.length} order${ids.length === 1 ? "" : "s"} removed`); }} />
+          <Orders orders={shown.filter((order) => !["Advance order", "Backorder"].includes(order.status))} clients={clients} edit={(o) => show("order", o)} cancel={cancelOrder} remove={removeOrders} />
         )}{" "}
         {section === "Clients" && (
           <Clients
@@ -764,7 +795,7 @@ export default function Home() {
         {section === "Sales Team Report" && <SalesTeamDashboard leads={leads} quotes={quotes} orders={orders} invoices={invoices} />}{" "}
         {["Sales Report", "Customer Report", "Product Report", "Inventory Report", "Payment Report"].includes(section) && <ReportsDashboard orders={orders} clients={clients} catalogue={catalogue} leads={leads} quotes={quotes} invoices={invoices} />}{" "}
         {section === "Quotations" && <QuotesPanel quotes={quotes.filter((quote) => `${quote.id} ${quote.customer}`.toLowerCase().includes(search.toLowerCase()))} edit={(quote) => show("quote", quote)} remove={(id) => { setQuotes((current) => current.filter((quote) => quote.id !== id)); logActivity("Removed quotation", "Quotations", id); flash("Quotation removed"); }} convert={(quote) => { const customer = clients.find((client) => client.name === quote.customer); const first = quote.products[0] || { product: "", sku: "", quantity: 0, unitPrice: 0, discount: 0 }; const products = quote.products.map(({ discount: _discount, ...product }) => product); const order: Order = { id: `GB-${String(Date.now()).slice(-5)}`, client: quote.customer, city: customer?.city || "", product: first.product, sku: first.sku, quantity: first.quantity, unitPrice: first.unitPrice * (1 - first.discount / 100), products, eta: "", status: "Confirmed", payment: "Partial", avatar: customer?.avatar || initials(quote.customer) }; setOrders((current) => [...current, order]); setQuotes((current) => current.map((item) => item.id === quote.id ? { ...item, status: "Converted" } : item)); logActivity("Converted quotation to order", "Quotations", `${quote.id} → ${order.id}`); flash(`Order ${order.id} created from ${quote.id}`); }} />}{" "}
-        {section === "Backorders" && <BackordersPanel orders={orders.filter((order) => order.status === "Advance order")} clients={clients} edit={(order) => show("order", order)} cancel={cancelOrder} remove={(ids) => { setOrders((current) => current.filter((order) => !ids.includes(order.id))); logActivity("Removed advance order", "Backorders", ids.join(", ")); flash(`${ids.length} advance order${ids.length === 1 ? "" : "s"} removed`); }} />}{" "}
+        {section === "Backorders" && <BackordersPanel orders={orders.filter((order) => order.status === "Advance order")} clients={clients} edit={(order) => show("order", order)} cancel={cancelOrder} remove={removeOrders} />}{" "}
         {section === "Invoices" && (
           <Invoices
             invoices={invoices.filter((i) =>
