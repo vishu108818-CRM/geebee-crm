@@ -610,6 +610,23 @@ export default function Home() {
     logActivity("Cancelled order and released stock", "Orders", cancelledIds.join(", "));
     flash(`Cancelled ${order.id}; stock allocation released.`);
   };
+  const initialiseOpeningStock = async () => {
+    if (!supabase || !session) return;
+    const response = await fetch("/api/admin/initialize-opening-stock", { method: "POST", headers: { Authorization: `Bearer ${session.access_token}` } });
+    const result = await response.json() as { ok?: boolean; updated?: number; error?: string };
+    if (!response.ok || !result.ok) { flash(result.error || "Opening stock could not be updated."); return; }
+    setCatalogue((current) => current.map((item) => ({ ...item, openingStock: 10000 })));
+    window.localStorage.setItem("geebee-opening-stock-10000-applied", "true");
+    logActivity("Initialised catalogue opening stock", "Catalogue", `${result.updated || 0} products set to 10,000 units`);
+    flash(`Opening stock set to 10,000 for ${result.updated || 0} products.`);
+  };
+  useEffect(() => {
+    if (!cloudReady || !session || session.user.email?.toLowerCase() !== "vishu108818@gmail.com") return;
+    if (window.localStorage.getItem("geebee-opening-stock-10000-applied")) return;
+    initialiseOpeningStock();
+  // This is an authorised one-time data migration for the workspace owner.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cloudReady, session]);
   const navigationGroups = [
     { label: "Dashboard", icon: LayoutDashboard, items: [{ label: "Dashboard", section: "Overview", module: "Overview" as CrmModule }] },
     { label: "Customers", icon: Users, items: [{ label: "All Customers", section: "Clients", module: "Clients" as CrmModule, count: String(clients.length) }, { label: "New Customers", section: "New Customers", module: "Clients" as CrmModule }, { label: "Customer Groups", section: "Customer Groups", module: "Clients" as CrmModule }, { label: "Customer Activity", section: "Customer Activity", module: "Clients" as CrmModule }] },
@@ -765,7 +782,7 @@ export default function Home() {
             items={catalogue.filter((item) => `${item.name} ${item.sku} ${item.category}`.toLowerCase().includes(search.toLowerCase()))}
             edit={(item) => show("catalogue", item)}
             addDrafts={(drafts) => { setCatalogue((current) => [...current, ...drafts]); logActivity("Imported catalogue products", "Catalogue", `${drafts.length} SKU draft(s)`); flash(`${drafts.length} SKU draft${drafts.length === 1 ? "" : "s"} added from catalogue image`); }}
-            setAllOpeningStock={() => { if (!window.confirm(`Set opening stock to 10,000 units for all ${catalogue.length} catalogue products? Existing orders and reservations will be kept.`)) return; setCatalogue((current) => current.map((item) => ({ ...item, openingStock: 10000 }))); logActivity("Initialised catalogue opening stock", "Catalogue", `${catalogue.length} products set to 10,000 units`); flash(`Opening stock set to 10,000 for ${catalogue.length} products.`); }}
+            setAllOpeningStock={() => { if (window.confirm(`Set opening stock to 10,000 units for all ${catalogue.length} catalogue products? Existing orders and reservations will be kept.`)) initialiseOpeningStock(); }}
             remove={(ids) => { setCatalogue((current) => current.filter((item) => !ids.includes(item.id))); logActivity("Removed catalogue product", "Catalogue", ids.join(", ")); flash(`${ids.length} product${ids.length === 1 ? "" : "s"} removed from catalogue`); }}
           />
         )}{" "}
