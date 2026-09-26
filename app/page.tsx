@@ -615,14 +615,14 @@ export default function Home() {
     const response = await fetch("/api/admin/initialize-opening-stock", { method: "POST", headers: { Authorization: `Bearer ${session.access_token}` } });
     const result = await response.json() as { ok?: boolean; updated?: number; error?: string };
     if (!response.ok || !result.ok) { flash(result.error || "Opening stock could not be updated."); return; }
-    setCatalogue((current) => current.map((item) => ({ ...item, openingStock: 10000 })));
-    window.localStorage.setItem("geebee-opening-stock-10000-applied", "true");
-    logActivity("Initialised catalogue opening stock", "Catalogue", `${result.updated || 0} products set to 10,000 units`);
-    flash(`Opening stock set to 10,000 for ${result.updated || 0} products.`);
+    setCatalogue((current) => current.map((item) => ({ ...item, openingStock: 10000, purchasedStock: 0, orderedStock: 0, damagedStock: 0, reservedStock: 0 })));
+    window.localStorage.setItem("geebee-clean-demo-stock-10000-v2", "true");
+    logActivity("Reset demo inventory", "Catalogue", `${result.updated || 0} products set to 10,000 free units`);
+    flash(`Demo inventory reset: ${result.updated || 0} products now have 10,000 free units.`);
   };
   useEffect(() => {
     if (!cloudReady || !session || session.user.email?.toLowerCase() !== "vishu108818@gmail.com") return;
-    if (window.localStorage.getItem("geebee-opening-stock-10000-applied")) return;
+    if (window.localStorage.getItem("geebee-clean-demo-stock-10000-v2")) return;
     initialiseOpeningStock();
   // This is an authorised one-time data migration for the workspace owner.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -782,7 +782,7 @@ export default function Home() {
             items={catalogue.filter((item) => `${item.name} ${item.sku} ${item.category}`.toLowerCase().includes(search.toLowerCase()))}
             edit={(item) => show("catalogue", item)}
             addDrafts={(drafts) => { setCatalogue((current) => [...current, ...drafts]); logActivity("Imported catalogue products", "Catalogue", `${drafts.length} SKU draft(s)`); flash(`${drafts.length} SKU draft${drafts.length === 1 ? "" : "s"} added from catalogue image`); }}
-            setAllOpeningStock={() => { if (window.confirm(`Set opening stock to 10,000 units for all ${catalogue.length} catalogue products? Existing orders and reservations will be kept.`)) initialiseOpeningStock(); }}
+            setAllOpeningStock={() => { if (window.confirm(`Reset demo inventory for all ${catalogue.length} products to 10,000 free units? Existing stock allocations will be cleared.`)) initialiseOpeningStock(); }}
             remove={(ids) => { setCatalogue((current) => current.filter((item) => !ids.includes(item.id))); logActivity("Removed catalogue product", "Catalogue", ids.join(", ")); flash(`${ids.length} product${ids.length === 1 ? "" : "s"} removed from catalogue`); }}
           />
         )}{" "}
