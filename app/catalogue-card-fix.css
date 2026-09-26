@@ -1,0 +1,40 @@
+/* Keep product identifiers in their own layer, independent of catalogue photos. */
+.catalogue-card {
+  display: flex;
+  flex-direction: column;
+  isolation: isolate;
+}
+
+.catalogue-image {
+  flex: 0 0 133px;
+  z-index: 0;
+}
+
+.catalogue-info {
+  position: relative;
+  z-index: 2;
+  display: block;
+  min-height: 142px;
+  overflow: visible;
+  background: #fff;
+}
+
+.catalogue-card-heading {
+  min-height: 18px;
+  position: relative;
+  z-index: 3;
+}
+
+.catalogue-card-heading small,
+.catalogue-info h3 {
+  position: relative;
+  z-index: 3;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+.catalogue-info h3 {
+  display: block !important;
+  margin-top: 7px !important;
+  min-height: 36px !important;
+}
