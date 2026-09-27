@@ -728,7 +728,7 @@ export default function Home() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search clients, orders, invoices..."
+              placeholder="Search SKU, product, client, order..."
             />
           </div>
           <button className="icon-btn" type="button" aria-label="Open notifications" onClick={() => setNotificationsOpen((current) => !current)}>
@@ -816,7 +816,7 @@ export default function Home() {
         )}{" "}
         {section === "Catalogue" && (
           <CataloguePanel
-            items={catalogue.filter((item) => `${item.name} ${item.sku} ${item.category}`.toLowerCase().includes(search.toLowerCase()))}
+            items={catalogue.filter((item) => `${catalogueName(item)} ${item.sku} ${item.category}`.toLowerCase().includes(search.toLowerCase()) || skuKey(item.sku).includes(skuKey(search)))}
             edit={(item) => show("catalogue", item)}
             addDrafts={(drafts) => { setCatalogue((current) => [...current, ...drafts]); logActivity("Imported catalogue products", "Catalogue", `${drafts.length} SKU draft(s)`); flash(`${drafts.length} SKU draft${drafts.length === 1 ? "" : "s"} added from catalogue image`); }}
             setAllOpeningStock={() => { if (window.confirm(`Reset demo inventory for all ${catalogue.length} products to 10,000 available units? Existing stock allocations will be cleared.`)) initialiseOpeningStock(); }}
