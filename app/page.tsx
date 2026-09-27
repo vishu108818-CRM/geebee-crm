@@ -302,6 +302,7 @@ const readDocumentText = async (file: File) => {
 };
 type InternalOrderSheet = { client: string; eta: string; products: ProductLine[]; note: string; transporter?: string };
 const skuKey = (value: string) => value.replace(/[^a-z0-9]/gi, "").toLowerCase();
+const isBackorderRecord = (order: Order) => /^ADV-/i.test(order.id) || /advance|back\s*order/i.test(order.status || "");
 const catalogueSku = (item: CatalogueItem) => item.sku?.trim() || "SKU pending";
 const catalogueName = (item: CatalogueItem) => item.name?.trim() || item.description?.trim() || (item.sku?.trim() ? `Product ${item.sku.trim()}` : "Product name pending");
 const nextOrderNumber = () => `GB-${Date.now().toString().slice(-8)}`;
@@ -666,7 +667,7 @@ export default function Home() {
     { label: "Dashboard", icon: LayoutDashboard, items: [{ label: "Dashboard", section: "Overview", module: "Overview" as CrmModule }] },
     { label: "Customers", icon: Users, items: [{ label: "All Customers", section: "Clients", module: "Clients" as CrmModule, count: String(clients.length) }, { label: "New Customers", section: "New Customers", module: "Clients" as CrmModule }, { label: "Customer Groups", section: "Customer Groups", module: "Clients" as CrmModule }, { label: "Customer Activity", section: "Customer Activity", module: "Clients" as CrmModule }] },
     { label: "Leads & Enquiries", icon: Target, items: [{ label: "Leads", section: "Leads", module: "Leads" as CrmModule, count: String(leads.filter((lead) => lead.status !== "Lost" && lead.status !== "Order Created").length) }, { label: "Enquiries", section: "Enquiries", module: "Leads" as CrmModule }, { label: "Follow-ups", section: "Follow-ups", module: "Leads" as CrmModule }, { label: "Lost Leads", section: "Lost Leads", module: "Leads" as CrmModule }] },
-    { label: "Sales", icon: BriefcaseBusiness, items: [{ label: "Quotations", section: "Quotations", module: "Orders" as CrmModule, count: String(quotes.filter((quote) => quote.status !== "Converted").length) }, { label: "Orders", section: "Orders", module: "Orders" as CrmModule, count: String(orders.filter((order) => !["Advance order", "Backorder"].includes(order.status)).length) }, { label: "Backorders", section: "Backorders", module: "Orders" as CrmModule, count: String(orders.filter((order) => order.status === "Advance order").length) }, { label: "Returns", section: "Returns", module: "Orders" as CrmModule }] },
+    { label: "Sales", icon: BriefcaseBusiness, items: [{ label: "Quotations", section: "Quotations", module: "Orders" as CrmModule, count: String(quotes.filter((quote) => quote.status !== "Converted").length) }, { label: "Orders", section: "Orders", module: "Orders" as CrmModule, count: String(orders.filter((order) => !isBackorderRecord(order)).length) }, { label: "Backorders", section: "Backorders", module: "Orders" as CrmModule, count: String(orders.filter(isBackorderRecord).length) }, { label: "Returns", section: "Returns", module: "Orders" as CrmModule }] },
     { label: "Products", icon: Boxes, items: [{ label: "Products / SKUs", section: "Catalogue", module: "Catalogue" as CrmModule, count: String(catalogue.length) }, { label: "Categories", section: "Categories", module: "Catalogue" as CrmModule }, { label: "Price Lists", section: "Price Lists", module: "Catalogue" as CrmModule }, { label: "Stock", section: "Stock", module: "Catalogue" as CrmModule }] },
     { label: "Inventory", icon: Warehouse, items: [{ label: "Stock Overview", section: "Stock Overview" }, { label: "Stock Movements", section: "Stock Movements" }, { label: "Low Stock", section: "Low Stock" }, { label: "Reserved Stock", section: "Reserved Stock" }, { label: "Warehouses", section: "Warehouses" }] },
     { label: "Operations", icon: Truck, items: [{ label: "Transporters", section: "Transporters", module: "Shipments" as CrmModule, count: String(transporters.length) }, { label: "Picking", section: "Picking" }, { label: "Packing", section: "Packing" }, { label: "Dispatch", section: "Dispatch" }, { label: "Delivery", section: "Delivery" }] },
@@ -780,7 +781,7 @@ export default function Home() {
           />
         )}{" "}
         {section === "Orders" && (
-          <Orders orders={shown.filter((order) => !["Advance order", "Backorder"].includes(order.status))} clients={clients} edit={(o) => show("order", o)} cancel={cancelOrder} remove={removeOrders} />
+          <Orders orders={shown.filter((order) => !isBackorderRecord(order))} clients={clients} edit={(o) => show("order", o)} cancel={cancelOrder} remove={removeOrders} />
         )}{" "}
         {section === "Clients" && (
           <Clients
@@ -799,7 +800,7 @@ export default function Home() {
         {section === "Sales Team Report" && <SalesTeamDashboard leads={leads} quotes={quotes} orders={orders} invoices={invoices} />}{" "}
         {["Sales Report", "Customer Report", "Product Report", "Inventory Report", "Payment Report"].includes(section) && <ReportsDashboard report={section} orders={orders} clients={clients} catalogue={catalogue} leads={leads} quotes={quotes} invoices={invoices} />}{" "}
         {section === "Quotations" && <QuotesPanel quotes={quotes.filter((quote) => `${quote.id} ${quote.customer}`.toLowerCase().includes(search.toLowerCase()))} edit={(quote) => show("quote", quote)} remove={(id) => { setQuotes((current) => current.filter((quote) => quote.id !== id)); logActivity("Removed quotation", "Quotations", id); flash("Quotation removed"); }} convert={(quote) => { const customer = clients.find((client) => client.name === quote.customer); const first = quote.products[0] || { product: "", sku: "", quantity: 0, unitPrice: 0, discount: 0 }; const products = quote.products.map(({ discount: _discount, ...product }) => product); const order: Order = { id: `GB-${String(Date.now()).slice(-5)}`, client: quote.customer, city: customer?.city || "", product: first.product, sku: first.sku, quantity: first.quantity, unitPrice: first.unitPrice * (1 - first.discount / 100), products, eta: "", status: "Confirmed", payment: "Partial", avatar: customer?.avatar || initials(quote.customer) }; setOrders((current) => [...current, order]); setQuotes((current) => current.map((item) => item.id === quote.id ? { ...item, status: "Converted" } : item)); logActivity("Converted quotation to order", "Quotations", `${quote.id} → ${order.id}`); flash(`Order ${order.id} created from ${quote.id}`); }} />}{" "}
-        {section === "Backorders" && <BackordersPanel orders={orders.filter((order) => order.status === "Advance order")} clients={clients} edit={(order) => show("order", order)} cancel={cancelOrder} remove={removeOrders} />}{" "}
+        {section === "Backorders" && <BackordersPanel orders={orders.filter((order) => isBackorderRecord(order) && (/^ADV-/i.test(order.id) || linesFor(order).some((line) => line.quantity > 0)))} clients={clients} edit={(order) => show("order", order)} cancel={cancelOrder} remove={removeOrders} />}{" "}
         {section === "Invoices" && (
           <Invoices
             invoices={invoices.filter((i) =>
@@ -882,7 +883,7 @@ export default function Home() {
               }
             }
             setOrders((x) =>
-              editing ? x.map((y) => (y.id === editing.id ? savedOrder : y)) : [...x, savedOrder, ...(advanceOrder ? [advanceOrder] : [])],
+              editing ? x.map((y) => (y.id === editing.id ? savedOrder : y)) : [...x, ...(savedOrder.products?.length ? [savedOrder] : []), ...(advanceOrder ? [advanceOrder] : [])],
             );
             setModal(null);
             logActivity(editing ? "Updated order" : "Created order", "Orders", o.id);
@@ -1025,7 +1026,7 @@ function Overview({
               View all <span>→</span>
             </button>
           </div>
-          <OrderTable orders={orders} edit={edit} compact />
+          <OrderTable orders={orders.filter((order) => !isBackorderRecord(order))} edit={edit} compact />
         </section>
         <aside className="side-column">
           <section className="panel collection">
