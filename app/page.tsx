@@ -471,6 +471,22 @@ function SignInScreen({ notice = "" }: { notice?: string }) {
   };
   return <main className="auth-screen"><section className="auth-card"><div className="auth-logo">G</div><span className="overline">GEEBEE IMPORTS</span><h1>Private operations workspace</h1><div className="auth-tabs"><button className={mode === "signin" ? "active" : ""} type="button" onClick={() => { setMode("signin"); setMessage(""); }}>Sign in</button><button className={mode === "signup" ? "active" : ""} type="button" onClick={() => { setMode("signup"); setMessage(""); }}>Sign up</button></div><p>{mode === "signin" ? "Enter your work email and we’ll send a secure, password-free sign-in link." : "Create your secure account details. Your administrator must still grant workspace access."}</p>{mode === "signup" && <><label>Full name<input value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Your full name" autoComplete="name"/></label><label>Phone number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+91 98765 43210" autoComplete="tel"/></label></>}<label>Work email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} onKeyDown={(event) => event.key === "Enter" && sendMagicLink()} placeholder="you@company.com" autoComplete="email"/></label><button className="primary auth-submit" type="button" disabled={sending} onClick={sendMagicLink}>{sending ? "Sending secure link…" : mode === "signup" ? "Create account and send link" : "Send secure sign-in link"}</button>{message && <div className={message.toLowerCase().includes("sent") ? "auth-message" : "auth-message warning"}>{message}</div>}<small>Only users granted access by a GeeBee administrator can open the CRM.</small></section></main>;
 }
+function SharedAccessScreen({ notice = "" }: { notice?: string }) {
+  const [passcode, setPasscode] = useState("");
+  const [message, setMessage] = useState(notice);
+  const [loading, setLoading] = useState(false);
+  const enter = async () => {
+    if (!passcode.trim() || loading) return;
+    setLoading(true); setMessage("");
+    try {
+      const response = await fetch("/api/auth/shared-access", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ passcode }) });
+      const result = await response.json() as { url?: string; error?: string };
+      if (!response.ok || !result.url) throw new Error(result.error || "Shared access could not be opened.");
+      window.location.assign(result.url);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Shared access could not be opened."); setLoading(false); }
+  };
+  return <main className="auth-screen"><section className="auth-card"><div className="auth-logo">G</div><span className="overline">GEEBEE IMPORTS</span><h1>Internal CRM access</h1><p>Enter the shared internal passcode to open the GeeBee workspace.</p><label>Shared passcode<input type="password" value={passcode} onChange={(event) => setPasscode(event.target.value)} onKeyDown={(event) => event.key === "Enter" && enter()} placeholder="Enter passcode" autoFocus/></label><button className="primary auth-submit" type="button" disabled={loading || !passcode.trim()} onClick={enter}>{loading ? "Opening workspace…" : "Open CRM"}</button>{message && <div className="auth-message warning">{message}</div>}<small>Temporary internal access. Do not share the passcode outside GeeBee.</small></section></main>;
+}
 export default function Home() {
   const [section, setSection] = useState("Overview"),
     [search, setSearch] = useState(""),
@@ -697,7 +713,7 @@ export default function Home() {
   const liveSections = new Set(["Overview", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Orders", "Backorders", "Invoices", "Catalogue", "Transporters", "Notifications", "Sales Team Report", "Sales Report", "Customer Report", "Product Report", "Inventory Report", "Payment Report", "Settings", "Recovery"]);
   if (!authReady) return <div className="auth-screen"><div className="auth-card"><b>Opening secure workspace…</b></div></div>;
   if (!supabase) return <div className="auth-screen"><div className="auth-card"><span className="overline">GEEBEE CRM</span><h1>Cloud connection needed</h1><p>Add the Supabase environment settings to open this private workspace.</p></div></div>;
-  if (!session) return <SignInScreen notice={accessNotice} />;
+  if (!session) return <SharedAccessScreen notice={accessNotice} />;
   return (
     <main>
       <aside className="sidebar">
