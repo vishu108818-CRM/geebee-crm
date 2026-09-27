@@ -976,20 +976,21 @@ function Overview({
   flash: (s: string) => void;
 }) {
   const amount = (value: string) => Number(value.replace(/[^\d.-]/g, "")) || 0;
-  const totalValue = orders.reduce((total, order) => total + orderTotal(order), 0);
+  const normalOrders = orders.filter((order) => !isBackorderRecord(order) && order.status !== "Cancelled");
+  const totalValue = normalOrders.reduce((total, order) => total + orderTotal(order), 0);
   const paid = invoices.filter((invoice) => invoice.status === "Paid").reduce((total, invoice) => total + amount(invoice.amount), 0);
   const overdue = invoices.filter((invoice) => invoice.status === "Overdue").reduce((total, invoice) => total + amount(invoice.amount), 0);
   const pending = invoices.filter((invoice) => invoice.status !== "Paid").reduce((total, invoice) => total + amount(invoice.amount), 0);
   const collectedPercent = paid + pending ? Math.round((paid / (paid + pending)) * 100) : 0;
-  const activeOrders = orders.filter((order) => order.status !== "Delivered").length;
-  const inTransit = orders.filter((order) => order.status === "In transit").length;
+  const activeOrders = normalOrders.filter((order) => order.status !== "Delivered").length;
+  const inTransit = normalOrders.filter((order) => order.status === "In transit").length;
   return (
     <>
       <div className="metrics">
         <Metric
           label="Orders in progress"
           value={String(activeOrders)}
-          change={`${orders.length} total orders`}
+          change={`${normalOrders.length} total orders`}
           icon={<PackageCheck />}
           kind="burgundy"
         />
