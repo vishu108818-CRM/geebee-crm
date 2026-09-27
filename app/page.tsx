@@ -448,14 +448,26 @@ function SignInScreen({ notice = "" }: { notice?: string }) {
   const [phone, setPhone] = useState("");
   const [message, setMessage] = useState(notice);
   const [sending, setSending] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+  useEffect(() => {
+    if (!cooldown) return;
+    const timer = window.setInterval(() => setCooldown((seconds) => Math.max(0, seconds - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [cooldown]);
   const sendMagicLink = async () => {
     if (!supabase || !email.trim()) return;
+    if (cooldown) { setMessage(`Please wait ${cooldown} seconds before requesting another sign-in email.`); return; }
     if (mode === "signup" && (!fullName.trim() || !phone.trim())) { setMessage("Please enter your full name and phone number."); return; }
     setSending(true); setMessage("");
     if (mode === "signup") window.localStorage.setItem("geebee-signup-profile", JSON.stringify({ email: email.trim().toLowerCase(), fullName: fullName.trim(), phone: phone.trim() }));
     const { error } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: window.location.origin, data: mode === "signup" ? { full_name: fullName.trim(), phone: phone.trim() } : undefined } });
     setSending(false);
-    setMessage(error ? error.message : "Secure link sent. Open it from your email to continue.");
+    if (error) {
+      setMessage(error.message.toLowerCase().includes("rate limit") ? "Email sending limit reached. Please wait before trying again. If this continues, the administrator needs to set up custom email delivery." : error.message);
+      return;
+    }
+    setCooldown(60);
+    setMessage("Secure link sent. Open it from your email to continue. You can request another link after 60 seconds.");
   };
   return <main className="auth-screen"><section className="auth-card"><div className="auth-logo">G</div><span className="overline">GEEBEE IMPORTS</span><h1>Private operations workspace</h1><div className="auth-tabs"><button className={mode === "signin" ? "active" : ""} type="button" onClick={() => { setMode("signin"); setMessage(""); }}>Sign in</button><button className={mode === "signup" ? "active" : ""} type="button" onClick={() => { setMode("signup"); setMessage(""); }}>Sign up</button></div><p>{mode === "signin" ? "Enter your work email and we’ll send a secure, password-free sign-in link." : "Create your secure account details. Your administrator must still grant workspace access."}</p>{mode === "signup" && <><label>Full name<input value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Your full name" autoComplete="name"/></label><label>Phone number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+91 98765 43210" autoComplete="tel"/></label></>}<label>Work email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} onKeyDown={(event) => event.key === "Enter" && sendMagicLink()} placeholder="you@company.com" autoComplete="email"/></label><button className="primary auth-submit" type="button" disabled={sending} onClick={sendMagicLink}>{sending ? "Sending secure link…" : mode === "signup" ? "Create account and send link" : "Send secure sign-in link"}</button>{message && <div className={message.toLowerCase().includes("sent") ? "auth-message" : "auth-message warning"}>{message}</div>}<small>Only users granted access by a GeeBee administrator can open the CRM.</small></section></main>;
 }
