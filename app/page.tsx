@@ -577,7 +577,10 @@ export default function Home() {
       const toItems = <T,>(key: string) => records[key].map((row) => row.data as T);
       if (records.clients.length || records.catalogue.length || records.orders.length || records.invoices.length || records.leads.length || records.quotes.length || records.tasks.length || records.transporters.length) {
         const loadedCatalogue = toItems<CatalogueItem>("catalogue").map((item) => ({ ...item, name: catalogueName(item) }));
-        setClients(toItems<Client>("clients")); setCatalogue(loadedCatalogue); setOrders(toItems<Order>("orders")); setInvoices(toItems<Invoice>("invoices")); setLeads(toItems<Lead>("leads")); setQuotes(toItems<Quote>("quotes")); setTasks(toItems<SalesTask>("tasks")); setTransporters(toItems<Transporter>("transporters"));
+        const loadedOrders = toItems<Order>("orders");
+        const currentOrderIds = new Set(loadedOrders.map((order) => order.id));
+        const loadedInvoices = toItems<Invoice>("invoices").filter((invoice) => !invoice.order || currentOrderIds.has(invoice.order));
+        setClients(toItems<Client>("clients")); setCatalogue(loadedCatalogue); setOrders(loadedOrders); setInvoices(loadedInvoices); setLeads(toItems<Lead>("leads")); setQuotes(toItems<Quote>("quotes")); setTasks(toItems<SalesTask>("tasks")); setTransporters(toItems<Transporter>("transporters"));
         recordSnapshots.current = Object.fromEntries(scalableTables.map((config) => [config.table, new Map(records[config.key].map((row) => [row.record_id, JSON.stringify(row.data)]))]));
       } else recordSnapshots.current = {};
       setCloudError(""); setCloudReady(true);
