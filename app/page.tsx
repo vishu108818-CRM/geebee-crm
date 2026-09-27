@@ -567,8 +567,13 @@ export default function Home() {
     const loadScalableRecords = async () => {
       // The workspace row remains only as the access-control anchor. Business
       // records now live in their own tables and can grow independently.
-      const { error: workspaceError } = await cloud.from("crm_workspaces").upsert({ owner_id: workspaceOwnerId, data: { normalizedRecords: true }, updated_at: new Date().toISOString() });
-      if (workspaceError || cancelled) { if (!cancelled) setCloudError("Cloud workspace is not ready yet. Please run the latest Supabase setup script."); return; }
+      const { data: existingWorkspace, error: workspaceReadError } = await cloud.from("crm_workspaces").select("owner_id").eq("owner_id", workspaceOwnerId).maybeSingle();
+      if (workspaceReadError || cancelled) { if (!cancelled) setCloudError("Cloud workspace is not ready yet. Please run the latest Supabase setup script."); return; }
+      if (!existingWorkspace && isAdmin) {
+        const { error: workspaceCreateError } = await cloud.from("crm_workspaces").upsert({ owner_id: workspaceOwnerId, data: { normalizedRecords: true }, updated_at: new Date().toISOString() });
+        if (workspaceCreateError || cancelled) { if (!cancelled) setCloudError("Cloud workspace is not ready yet. Please run the latest Supabase setup script."); return; }
+      }
+      if (!existingWorkspace && !isAdmin) { setCloudError("Shared access could not locate the GeeBee workspace."); return; }
       const results = await Promise.all(scalableTables.map(({ table }) => cloud.from(table).select("record_id, data").eq("workspace_owner_id", workspaceOwnerId).order("updated_at", { ascending: false }).limit(50000)));
       if (cancelled) return;
       const failed = results.find((result) => result.error);
@@ -587,7 +592,7 @@ export default function Home() {
     };
     loadScalableRecords();
     return () => { cancelled = true; };
-  }, [authReady, session, storageReady, workspaceOwnerId]);
+  }, [authReady, session, storageReady, workspaceOwnerId, isAdmin]);
   useEffect(() => {
     const cloud = supabase;
     if (!cloud || !session || !cloudReady || !workspaceOwnerId) return;
