@@ -18,6 +18,7 @@ import "./reports.css";
 import "./recovery.css";
 import "./transporters.css";
 import "./image-studio.css";
+import "./image-studio-fit.css";
 import { supabase } from "./lib/supabase";
 import type { Session } from "@supabase/supabase-js";
 import {
@@ -2137,6 +2138,7 @@ function ImageStudio() {
   const [sourceUrl, setSourceUrl] = useState("");
   const [maskUrl, setMaskUrl] = useState("");
   const [shape, setShape] = useState<"circle" | "rounded" | "arch" | "portrait" | "wide" | "reference">("circle");
+  const [fitMode, setFitMode] = useState<"fit" | "fill">("fit");
   const [zoom, setZoom] = useState(100);
   const [x, setX] = useState(0);
   const [y, setY] = useState(0);
@@ -2160,8 +2162,11 @@ function ImageStudio() {
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!source) return;
-    const cover = Math.max(canvas.width / source.width, canvas.height / source.height) * (zoom / 100);
-    const width = source.width * cover, height = source.height * cover;
+    // Fit is the safe default: it preserves the complete uploaded image.
+    // Fill is available when an edge-to-edge crop is preferred.
+    const baseScale = (fitMode === "fit" ? Math.min : Math.max)(canvas.width / source.width, canvas.height / source.height);
+    const scale = baseScale * (zoom / 100);
+    const width = source.width * scale, height = source.height * scale;
     const maxX = Math.max(0, (width - canvas.width) / 2);
     const maxY = Math.max(0, (height - canvas.height) / 2);
     const dx = (canvas.width - width) / 2 + maxX * (x / 100);
@@ -2182,7 +2187,7 @@ function ImageStudio() {
       ctx.save(); ctx.globalCompositeOperation = "destination-in"; ctx.drawImage(maskRef.current, 0, 0, canvas.width, canvas.height); ctx.restore();
     }
   };
-  useEffect(() => { draw(); }, [sourceUrl, maskUrl, shape, zoom, x, y, quality, maskRatio]); // redraw the HD export canvas
+  useEffect(() => { draw(); }, [sourceUrl, maskUrl, shape, fitMode, zoom, x, y, quality, maskRatio]); // redraw the HD export canvas
   const exportPng = () => {
     const canvas = canvasRef.current;
     if (!canvas || !sourceRef.current) return;
@@ -2200,11 +2205,12 @@ function ImageStudio() {
       <aside className="studio-controls">
         <label className="studio-upload"><ImagePlus size={20}/><b>{sourceUrl ? "Replace product image" : "Upload product image"}</b><small>JPG, PNG or WebP</small><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) loadImage(file, (url, image) => { sourceRef.current = image; setSourceUrl(url); }); }}/></label>
         <div className="studio-control-block"><b>Choose a shape</b><div className="shape-grid">{shapes.map((item) => <button type="button" key={item.id} className={`shape-card ${shape === item.id ? "selected" : ""}`} onClick={() => setShape(item.id)}><i className={`shape-icon ${item.id}`}/><span>{item.name}</span><small>{item.note}</small></button>)}</div></div>
+        <div className="studio-control-block"><b>How should the image sit in the shape?</b><div className="fit-options"><button type="button" className={fitMode === "fit" ? "selected" : ""} onClick={() => { setFitMode("fit"); setZoom(100); setX(0); setY(0); }}><strong>Fit whole image</strong><small>Nothing is cut off</small></button><button type="button" className={fitMode === "fill" ? "selected" : ""} onClick={() => { setFitMode("fill"); setZoom(100); setX(0); setY(0); }}><strong>Fill shape</strong><small>Crop to the edges</small></button></div></div>
         <div className="studio-control-block reference-control"><b>Use your reference shape</b><p>Upload a transparent PNG template. Its visible area becomes the crop shape.</p><label className="reference-upload">{maskUrl ? "Replace reference PNG" : "Upload reference PNG"}<input type="file" accept="image/png" onChange={(event) => { const file = event.target.files?.[0]; if (file) loadImage(file, (url, image) => { maskRef.current = image; setMaskRatio(image.width / image.height); setMaskUrl(url); setShape("reference"); }); }}/></label></div>
         <div className="studio-control-block"><b>Output size</b><div className="size-buttons">{[1080, 2048, 4096].map((size) => <button type="button" key={size} className={quality === size ? "selected" : ""} onClick={() => setQuality(size)}>{size === 1080 ? "1080px" : `${size / 1024}K HD`}</button>)}</div></div>
       </aside>
       <div className="studio-preview-wrap"><div className="studio-preview">{!sourceUrl && <div className="studio-empty"><ImagePlus size={30}/><b>Upload an image to start</b><span>Your final crop will preview here.</span></div>}<canvas ref={canvasRef} className={sourceUrl ? "ready" : ""}/></div>{sourceUrl && <p className="preview-size">Export: {dimensions.width} × {dimensions.height}px · transparent PNG</p>}</div>
-      <aside className="studio-adjust"><h3>Adjust crop</h3><p>Move the product inside the selected frame.</p><label>Zoom <b>{zoom}%</b><input type="range" min="100" max="250" value={zoom} onChange={(event) => setZoom(Number(event.target.value))}/></label><label>Horizontal position<input type="range" min="-100" max="100" value={x} onChange={(event) => setX(Number(event.target.value))}/></label><label>Vertical position<input type="range" min="-100" max="100" value={y} onChange={(event) => setY(Number(event.target.value))}/></label><button type="button" className="outline studio-reset" onClick={() => { setZoom(100); setX(0); setY(0); }}>Reset position</button><button type="button" className="primary studio-download" disabled={!sourceUrl || (shape === "reference" && !maskUrl)} onClick={exportPng}><Download size={17}/> Download HD PNG</button></aside>
+      <aside className="studio-adjust"><h3>Adjust image</h3><p>{fitMode === "fit" ? "The whole image is preserved. Zoom only if you want to crop it deliberately." : "Move the image inside the selected frame."}</p><label>Zoom <b>{zoom}%</b><input type="range" min="100" max="250" value={zoom} onChange={(event) => setZoom(Number(event.target.value))}/></label><label>Horizontal position<input type="range" min="-100" max="100" value={x} onChange={(event) => setX(Number(event.target.value))}/></label><label>Vertical position<input type="range" min="-100" max="100" value={y} onChange={(event) => setY(Number(event.target.value))}/></label><button type="button" className="outline studio-reset" onClick={() => { setZoom(100); setX(0); setY(0); }}>Reset position</button><button type="button" className="primary studio-download" disabled={!sourceUrl || (shape === "reference" && !maskUrl)} onClick={exportPng}><Download size={17}/> Download HD PNG</button></aside>
     </div>
   </section>;
 }
