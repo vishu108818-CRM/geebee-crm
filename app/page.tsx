@@ -17,6 +17,7 @@ import "./tasks.css";
 import "./reports.css";
 import "./recovery.css";
 import "./transporters.css";
+import "./image-studio.css";
 import { supabase } from "./lib/supabase";
 import type { Session } from "@supabase/supabase-js";
 import {
@@ -31,6 +32,8 @@ import {
   ClipboardList,
   FileText,
   ImagePlus,
+  Download,
+  Crop,
   LayoutDashboard,
   PackageCheck,
   Pencil,
@@ -711,6 +714,7 @@ export default function Home() {
     { label: "Billing", icon: ReceiptText, items: [{ label: "Invoices", section: "Invoices", module: "Invoices" as CrmModule, count: String(invoices.filter((i) => i.status !== "Paid").length) }, { label: "Payments", section: "Payments", module: "Payments" as CrmModule, count: "2" }, { label: "Outstanding", section: "Outstanding", module: "Payments" as CrmModule }, { label: "Ageing", section: "Ageing", module: "Payments" as CrmModule }] },
     { label: "Imports", icon: ShipWheel, items: [{ label: "Suppliers", section: "Suppliers" }, { label: "Purchase Orders", section: "Purchase Orders" }, { label: "Shipments", section: "Shipments", module: "Shipments" as CrmModule }, { label: "Containers", section: "Containers", module: "Shipments" as CrmModule }, { label: "Landed Cost", section: "Landed Cost", module: "Shipments" as CrmModule }] },
     { label: "Reports", icon: ChartNoAxesCombined, items: [{ label: "Sales", section: "Sales Report" }, { label: "Customers", section: "Customer Report" }, { label: "Products", section: "Product Report" }, { label: "Inventory", section: "Inventory Report" }, { label: "Payments", section: "Payment Report" }, { label: "Sales Team", section: "Sales Team Report" }] },
+    { label: "Content Studio", icon: ImagePlus, items: [{ label: "Social image studio", section: "Image Studio", module: "Catalogue" as CrmModule }] },
     { label: "Automation", icon: Bot, items: [{ label: "Rules", section: "Rules" }, { label: "Notifications", section: "Notifications" }, { label: "Templates", section: "Templates" }] },
     { label: "Settings", icon: Settings, items: [{ label: "Users", section: "Settings" }, { label: "Roles", section: "Settings" }, { label: "Data recovery", section: "Recovery" }, { label: "GST", section: "GST" }, { label: "Warehouses", section: "Warehouses" }, { label: "WhatsApp", section: "WhatsApp" }, { label: "Integrations", section: "Integrations" }] },
   ];
@@ -718,7 +722,7 @@ export default function Home() {
     ...auditEvents.slice(0, 4).map((event) => ({ title: event.action, detail: `${event.actor_email} · ${event.module}`, time: new Date(event.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }) })),
     ...invoices.filter((invoice) => invoice.status !== "Paid").slice(0, 2).map((invoice) => ({ title: `${invoice.status} invoice ${invoice.id}`, detail: `${invoice.client} · ${invoice.amount} due ${invoice.due}`, time: "Needs attention" })),
   ].slice(0, 6);
-  const liveSections = new Set(["Overview", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Orders", "Backorders", "Invoices", "Catalogue", "Transporters", "Notifications", "Sales Team Report", "Sales Report", "Customer Report", "Product Report", "Inventory Report", "Payment Report", "Settings", "Recovery"]);
+  const liveSections = new Set(["Overview", "Clients", "Leads", "Enquiries", "Follow-ups", "Lost Leads", "Quotations", "Orders", "Backorders", "Invoices", "Catalogue", "Transporters", "Notifications", "Sales Team Report", "Sales Report", "Customer Report", "Product Report", "Inventory Report", "Payment Report", "Image Studio", "Settings", "Recovery"]);
   if (!authReady) return <div className="auth-screen"><div className="auth-card"><b>Opening secure workspace…</b></div></div>;
   if (!supabase) return <div className="auth-screen"><div className="auth-card"><span className="overline">GEEBEE CRM</span><h1>Cloud connection needed</h1><p>Add the Supabase environment settings to open this private workspace.</p></div></div>;
   if (!session) return <SharedAccessScreen notice={accessNotice} />;
@@ -817,6 +821,7 @@ export default function Home() {
             flash={flash}
           />
         )}{" "}
+        {section === "Image Studio" && <ImageStudio />}{" "}
         {section === "Orders" && (
           <Orders orders={shown.filter((order) => !isBackorderRecord(order))} clients={clients} edit={(o) => show("order", o)} cancel={cancelOrder} remove={removeOrders} />
         )}{" "}
@@ -2124,6 +2129,84 @@ function InvoiceModal({
       </button>
     </Shell>
   );
+}
+function ImageStudio() {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const sourceRef = useRef<HTMLImageElement | null>(null);
+  const maskRef = useRef<HTMLImageElement | null>(null);
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [maskUrl, setMaskUrl] = useState("");
+  const [shape, setShape] = useState<"circle" | "rounded" | "arch" | "portrait" | "wide" | "reference">("circle");
+  const [zoom, setZoom] = useState(100);
+  const [x, setX] = useState(0);
+  const [y, setY] = useState(0);
+  const [quality, setQuality] = useState(2048);
+  const [maskRatio, setMaskRatio] = useState(1);
+  const ratio = shape === "portrait" ? .8 : shape === "wide" ? 1.78 : shape === "reference" ? maskRatio : 1;
+  const dimensions = ratio >= 1 ? { width: quality, height: Math.round(quality / ratio) } : { width: Math.round(quality * ratio), height: quality };
+
+  const loadImage = (file: File, callback: (url: string, image: HTMLImageElement) => void) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => callback(url, image);
+    image.src = url;
+  };
+  const draw = () => {
+    const canvas = canvasRef.current;
+    const source = sourceRef.current;
+    if (!canvas) return;
+    canvas.width = dimensions.width; canvas.height = dimensions.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!source) return;
+    const cover = Math.max(canvas.width / source.width, canvas.height / source.height) * (zoom / 100);
+    const width = source.width * cover, height = source.height * cover;
+    const maxX = Math.max(0, (width - canvas.width) / 2);
+    const maxY = Math.max(0, (height - canvas.height) / 2);
+    const dx = (canvas.width - width) / 2 + maxX * (x / 100);
+    const dy = (canvas.height - height) / 2 + maxY * (y / 100);
+    ctx.save();
+    if (shape !== "reference") {
+      ctx.beginPath();
+      if (shape === "circle") ctx.arc(canvas.width / 2, canvas.height / 2, Math.min(canvas.width, canvas.height) / 2, 0, Math.PI * 2);
+      if (shape === "rounded") ctx.roundRect(0, 0, canvas.width, canvas.height, canvas.width * .13);
+      if (shape === "portrait") ctx.roundRect(0, 0, canvas.width, canvas.height, canvas.width * .08);
+      if (shape === "wide") ctx.roundRect(0, 0, canvas.width, canvas.height, canvas.height * .12);
+      if (shape === "arch") { const r = canvas.width / 2; ctx.moveTo(0, canvas.height); ctx.lineTo(0, r); ctx.arc(r, r, r, Math.PI, 0); ctx.lineTo(canvas.width, canvas.height); ctx.closePath(); }
+      ctx.clip();
+    }
+    ctx.drawImage(source, dx, dy, width, height);
+    ctx.restore();
+    if (shape === "reference" && maskRef.current) {
+      ctx.save(); ctx.globalCompositeOperation = "destination-in"; ctx.drawImage(maskRef.current, 0, 0, canvas.width, canvas.height); ctx.restore();
+    }
+  };
+  useEffect(() => { draw(); }, [sourceUrl, maskUrl, shape, zoom, x, y, quality, maskRatio]); // redraw the HD export canvas
+  const exportPng = () => {
+    const canvas = canvasRef.current;
+    if (!canvas || !sourceRef.current) return;
+    const anchor = document.createElement("a");
+    anchor.download = `geebee-social-${shape}-${dimensions.width}x${dimensions.height}.png`;
+    anchor.href = canvas.toDataURL("image/png"); anchor.click();
+  };
+  const shapes: Array<{ id: typeof shape; name: string; note: string }> = [
+    { id: "circle", name: "Circle", note: "Profile / sticker" }, { id: "rounded", name: "Rounded", note: "Social post" },
+    { id: "arch", name: "Arch", note: "Product feature" }, { id: "portrait", name: "Portrait", note: "4:5 feed" }, { id: "wide", name: "Wide", note: "Story / banner" },
+  ];
+  return <section className="image-studio">
+    <div className="studio-hero"><div><span className="overline">GEEBEE CONTENT STUDIO</span><h2>Social image cropper</h2><p>Prepare product visuals in a chosen shape and download a crisp HD PNG.</p></div><span className="studio-badge"><Crop size={17}/> HD export</span></div>
+    <div className="studio-layout">
+      <aside className="studio-controls">
+        <label className="studio-upload"><ImagePlus size={20}/><b>{sourceUrl ? "Replace product image" : "Upload product image"}</b><small>JPG, PNG or WebP</small><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) loadImage(file, (url, image) => { sourceRef.current = image; setSourceUrl(url); }); }}/></label>
+        <div className="studio-control-block"><b>Choose a shape</b><div className="shape-grid">{shapes.map((item) => <button type="button" key={item.id} className={`shape-card ${shape === item.id ? "selected" : ""}`} onClick={() => setShape(item.id)}><i className={`shape-icon ${item.id}`}/><span>{item.name}</span><small>{item.note}</small></button>)}</div></div>
+        <div className="studio-control-block reference-control"><b>Use your reference shape</b><p>Upload a transparent PNG template. Its visible area becomes the crop shape.</p><label className="reference-upload">{maskUrl ? "Replace reference PNG" : "Upload reference PNG"}<input type="file" accept="image/png" onChange={(event) => { const file = event.target.files?.[0]; if (file) loadImage(file, (url, image) => { maskRef.current = image; setMaskRatio(image.width / image.height); setMaskUrl(url); setShape("reference"); }); }}/></label></div>
+        <div className="studio-control-block"><b>Output size</b><div className="size-buttons">{[1080, 2048, 4096].map((size) => <button type="button" key={size} className={quality === size ? "selected" : ""} onClick={() => setQuality(size)}>{size === 1080 ? "1080px" : `${size / 1024}K HD`}</button>)}</div></div>
+      </aside>
+      <div className="studio-preview-wrap"><div className="studio-preview">{!sourceUrl && <div className="studio-empty"><ImagePlus size={30}/><b>Upload an image to start</b><span>Your final crop will preview here.</span></div>}<canvas ref={canvasRef} className={sourceUrl ? "ready" : ""}/></div>{sourceUrl && <p className="preview-size">Export: {dimensions.width} × {dimensions.height}px · transparent PNG</p>}</div>
+      <aside className="studio-adjust"><h3>Adjust crop</h3><p>Move the product inside the selected frame.</p><label>Zoom <b>{zoom}%</b><input type="range" min="100" max="250" value={zoom} onChange={(event) => setZoom(Number(event.target.value))}/></label><label>Horizontal position<input type="range" min="-100" max="100" value={x} onChange={(event) => setX(Number(event.target.value))}/></label><label>Vertical position<input type="range" min="-100" max="100" value={y} onChange={(event) => setY(Number(event.target.value))}/></label><button type="button" className="outline studio-reset" onClick={() => { setZoom(100); setX(0); setY(0); }}>Reset position</button><button type="button" className="primary studio-download" disabled={!sourceUrl || (shape === "reference" && !maskUrl)} onClick={exportPng}><Download size={17}/> Download HD PNG</button></aside>
+    </div>
+  </section>;
 }
 function Metric({
   label,
