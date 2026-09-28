@@ -1075,7 +1075,7 @@ function Overview({
               </div>
             </div>
             <div className="ring-row">
-              <div className="ring">
+              <div className="ring" style={{ background: `conic-gradient(#8b2038 0 ${collectedPercent}%, #e4eff0 ${collectedPercent}% 100%)` }}>
                 <div>
                   <b>{collectedPercent}%</b>
                   <small>Collected</small>
